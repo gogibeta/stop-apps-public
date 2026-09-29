@@ -7,10 +7,13 @@
 #   2b. searches for one real app (Chrome/Gmail/Maps/YouTube), selects it,
 #       taps "Stop 1 apps" and verifies the ForceStopEngine automation
 #       trace ([dbg] lines) in logcat through to the run-finished marker.
-# The harness tolerates slow emulator boot (system ANR dialogs are
-# dismissed — "Close app" as a last resort — and tap targets are polled)
-# and performs REAL crash detection: any FATAL EXCEPTION whose "Process:"
-# line is our package fails the run.
+# The harness tolerates slow emulator boot and a wedged system_server
+# ("Process system isn't responding" — common on software-emulated runners):
+# every adb call that can block runs under `timeout`, a persistent system ANR
+# is escalated from "Wait" to "Close app" (soft reboot) and, if the framework
+# still won't come back, to a full `adb reboot`; the app is then relaunched
+# and polling continues. It performs REAL crash detection: any FATAL
+# EXCEPTION whose "Process:" line is our package fails the run.
 # NOTE: this validates the full automation pipeline end-to-end on AOSP
 # Settings. It cannot reproduce MIUI-specific Settings UI behavior.
 set -u
@@ -23,30 +26,40 @@ PKG="com.stopapps.app"
 SVC="com.stopapps.app/com.stopapps.app.accessibility.StopAccessService"
 MAIN="$PKG/com.stopapps.app.MainActivity"
 
+# adb that can never hang forever. A wedged system_server makes plain adb
+# block indefinitely (notably `uiautomator dump`), which turns every poll
+# loop glacial — the script's own timeouts stop being enforced. 120s is
+# generous for a healthy-but-slow software emulator (dumps take ~2-5s).
+tadb() { timeout 120 adb "$@"; }
+
 echo "=== installing $APK ==="
-adb install -r "$APK"
+timeout 600 adb install -r "$APK"
 
 echo "=== granting usage-stats access ==="
-adb shell appops set "$PKG" GET_USAGE_STATS allow
+tadb shell appops set "$PKG" GET_USAGE_STATS allow
 
 echo "=== enabling accessibility service ==="
-adb shell settings put secure enabled_accessibility_services "$SVC"
-adb shell settings put secure accessibility_enabled 1
+tadb shell settings put secure enabled_accessibility_services "$SVC"
+tadb shell settings put secure accessibility_enabled 1
 sleep 3
-adb shell settings get secure enabled_accessibility_services | tee "$OUT/accessibility.txt"
+tadb shell settings get secure enabled_accessibility_services | tee "$OUT/accessibility.txt"
 if ! grep -q "StopAccessService" "$OUT/accessibility.txt"; then
   echo "ACCESSIBILITY SERVICE NOT ENABLED"; exit 1
 fi
 
 echo "=== granting notification permission (avoid runtime dialog) ==="
-adb shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS || true
+tadb shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS || true
 
 # ---------- UI automation helpers ----------
 
 # Dump the current UI hierarchy into $OUT/ui-dump.xml.
+# Returns 1 (and removes any stale dump) when the system is too wedged to
+# produce one, so callers poll again instead of acting on stale coordinates.
 ui_dump() {
-  adb shell uiautomator dump /data/local/tmp/ui.xml > /dev/null 2>&1
-  adb pull /data/local/tmp/ui.xml "$OUT/ui-dump.xml" > /dev/null 2>&1
+  rm -f "$OUT/ui-dump.xml"
+  tadb shell uiautomator dump /data/local/tmp/ui.xml > /dev/null 2>&1 || return 1
+  tadb pull /data/local/tmp/ui.xml "$OUT/ui-dump.xml" > /dev/null 2>&1 || return 1
+  [ -s "$OUT/ui-dump.xml" ] || return 1
 }
 
 # Print "x y" (center) of the first node whose text matches the regex.
@@ -91,50 +104,112 @@ EOF
 # Single tap attempt on a node matching the regex. Returns 1 if absent.
 tap_node() {
   local pattern="$1" desc="$2"
-  ui_dump
+  ui_dump || return 1
   local bounds
   if ! bounds=$(find_node "$pattern"); then
     return 1
   fi
   echo "tapping '$desc' at $bounds"
   # shellcheck disable=SC2086
-  adb shell input tap $bounds
+  tadb shell input tap $bounds || return 1
 }
 
 # True when logcat holds a FATAL EXCEPTION for our package.
 app_crashed() {
-  adb logcat -d -t 4000 2>/dev/null | grep -A3 "FATAL EXCEPTION" | grep -q "Process: $PKG"
+  tadb logcat -d -t 4000 2>/dev/null | grep -A3 "FATAL EXCEPTION" | grep -q "Process: $PKG"
 }
 
 # Save our app's crash stack trace for the artifacts.
 save_crash() {
-  adb logcat -d 2>/dev/null | grep -B2 -A30 "FATAL EXCEPTION" > "$OUT/app-crash.txt" || true
+  tadb logcat -d 2>/dev/null | grep -B2 -A30 "FATAL EXCEPTION" > "$OUT/app-crash.txt" || true
 }
 
-ANR_COUNT=0
+# Consecutive polls where the system looked wedged (system ANR dialog shown
+# or uiautomator dump itself timing out). Escalates Wait -> Close app ->
+# recover (soft reboot, else full reboot + app relaunch).
+WEDGED_STREAK=0
 
-# Dismiss system "X isn't responding" ANR dialogs. Fails (returns 1) if the
-# ANR is for OUR app. If "Wait" doesn't clear a system ANR after ~8 tries,
-# taps "Close app" to kill the wedged system process (it restarts).
-dismiss_system_dialogs() {
-  ui_dump
-  grep -q "isn't responding" "$OUT/ui-dump.xml" || { ANR_COUNT=0; return 0; }
-  local title
-  title=$(grep -o 'text="[^"]*isn'"'"'t responding"' "$OUT/ui-dump.xml" | head -1)
-  echo "system ANR dialog: $title"
-  if [[ "$title" == *"Stop Apps"* ]]; then
-    echo "APP ANR — our app is not responding"
+# Bring the device back after a wedged system_server: wait for the framework
+# to answer again (soft reboot follows the ANR dialog's "Close app"), else
+# fall back to a full `adb reboot`; then relaunch our app (any reboot kills
+# it — its a11y/usage-stats settings persist) and confirm it is alive.
+# Returns 1 when the device cannot be recovered.
+recover_wedged_system() {
+  echo "=== recovering wedged system ==="
+  local i ok=""
+  for i in $(seq 1 24); do
+    if timeout 45 adb shell uiautomator dump /data/local/tmp/probe.xml > /dev/null 2>&1; then
+      ok=1; break
+    fi
+    sleep 10
+  done
+  if [ -z "$ok" ]; then
+    echo "framework still dead -> full adb reboot"
+    timeout 60 adb reboot || true
+    for i in $(seq 1 90); do
+      if timeout 30 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q '^1$'; then
+        ok=1; break
+      fi
+      sleep 10
+    done
+    sleep 30
+  fi
+  if [ -z "$ok" ]; then
+    echo "DEVICE UNRECOVERABLE"
     return 1
   fi
-  ANR_COUNT=$((ANR_COUNT + 1))
-  local bounds btn="Wait" bpat="^Wait$"
-  if [ "$ANR_COUNT" -ge 8 ]; then
-    btn="Close app"; bpat="^Close app$"; ANR_COUNT=0
+  echo "framework back - relaunching app"
+  tadb shell am start -n "$MAIN" > /dev/null 2>&1 || true
+  sleep 10
+  if [ -z "$(timeout 30 adb shell pidof "$PKG" 2>/dev/null)" ]; then
+    echo "APP NOT RUNNING after recovery"
+    return 1
   fi
-  if bounds=$(find_node "$bpat"); then
-    echo "tapping '$btn' at $bounds"
+  echo "recovered: app relaunched and alive"
+  return 0
+}
+
+# Dismiss system "X isn't responding" ANR dialogs. Fails (returns 1) if the
+# ANR is for OUR app. A system ANR (or a wedged dump) that persists across
+# 3 consecutive polls is escalated: tap "Close app" to kill the wedged
+# system process, then recover and continue polling.
+dismiss_system_dialogs() {
+  local bounds
+  if ! ui_dump; then
+    echo "WARN: ui dump timed out - system looks wedged"
+    WEDGED_STREAK=$((WEDGED_STREAK + 1))
+  else
+    if ! grep -q "isn't responding" "$OUT/ui-dump.xml"; then
+      WEDGED_STREAK=0
+      return 0
+    fi
+    local title
+    title=$(grep -o 'text="[^"]*isn'"'"'t responding"' "$OUT/ui-dump.xml" | head -1)
+    echo "system ANR dialog: $title"
+    if [[ "$title" == *"Stop Apps"* ]]; then
+      echo "APP ANR — our app is not responding"
+      return 1
+    fi
+    WEDGED_STREAK=$((WEDGED_STREAK + 1))
+  fi
+  if [ "$WEDGED_STREAK" -ge 3 ]; then
+    echo "system wedged for $WEDGED_STREAK consecutive polls - tapping 'Close app'"
+    ui_dump || true
+    if bounds=$(find_node "^Close app$"); then
+      echo "tapping 'Close app' at $bounds"
+      # shellcheck disable=SC2086
+      tadb shell input tap $bounds || true
+      sleep 5
+    fi
+    WEDGED_STREAK=0
+    recover_wedged_system || return 1
+    return 0
+  fi
+  ui_dump || true
+  if bounds=$(find_node "^Wait$"); then
+    echo "tapping 'Wait' at $bounds (wedged streak $WEDGED_STREAK)"
     # shellcheck disable=SC2086
-    adb shell input tap $bounds
+    tadb shell input tap $bounds || true
     sleep 3
   fi
   return 0
@@ -166,7 +241,7 @@ wait_for_text() {
   local tries=$((timeout_s / 5))
   for _ in $(seq 1 "$tries"); do
     dismiss_system_dialogs || return 1
-    ui_dump
+    ui_dump || { sleep 5; continue; }
     local t
     if t=$(node_text "$pattern"); then
       echo "$t"
@@ -178,14 +253,14 @@ wait_for_text() {
 }
 
 screenshot() {
-  adb shell screencap -p "/data/local/tmp/$1"
-  adb pull "/data/local/tmp/$1" "$OUT/" > /dev/null 2>&1 || true
+  tadb shell screencap -p "/data/local/tmp/$1"
+  tadb pull "/data/local/tmp/$1" "$OUT/" > /dev/null 2>&1 || true
 }
 
 # ---------- test ----------
 
 echo "=== launching app ==="
-adb shell am start -n "$MAIN"
+tadb shell am start -n "$MAIN"
 sleep 8
 screenshot "stopapps-home.png"
 
@@ -195,7 +270,7 @@ if app_crashed; then
   save_crash
   exit 1
 fi
-if [ -z "$(adb shell pidof "$PKG" 2>/dev/null)" ]; then
+if [ -z "$(timeout 30 adb shell pidof "$PKG" 2>/dev/null)" ]; then
   echo "APP PROCESS NOT RUNNING after launch"
   exit 1
 fi
@@ -237,8 +312,8 @@ TARGET=""
 for CAND in Chrome Gmail Maps YouTube; do
   wait_and_tap "^Search apps" "search field" 60 || { echo "SEARCH FIELD NOT FOUND"; exit 1; }
   # Clear any previous query, then type the candidate.
-  for _ in $(seq 1 30); do adb shell input keyevent 67; done
-  adb shell input text "$CAND"
+  for _ in $(seq 1 30); do tadb shell input keyevent 67; done
+  tadb shell input text "$CAND"
   sleep 3
   if wait_for_text "^${CAND}$" 30 > /dev/null; then
     TARGET="$CAND"
@@ -265,16 +340,16 @@ for _ in $(seq 1 48); do
     save_crash
     exit 1
   fi
-  if adb logcat -d -t 4000 2>/dev/null | grep -q "\[dbg\] run finished"; then FOUND=1; break; fi
+  if tadb logcat -d -t 4000 2>/dev/null | grep -q "\[dbg\] run finished"; then FOUND=1; break; fi
 done
 if [ -z "$FOUND" ]; then
   echo "RUN DID NOT FINISH IN TIME"
-  adb logcat -d -t 4000 > "$OUT/logcat-full.txt" || true
+  tadb logcat -d -t 4000 > "$OUT/logcat-full.txt" || true
   exit 1
 fi
 
 echo "=== collecting stop-run diagnostics ==="
-adb logcat -d > "$OUT/logcat-full.txt" || true
+tadb logcat -d > "$OUT/logcat-full.txt" || true
 grep -iE "stopapps|StopAccess|ForceStop" "$OUT/logcat-full.txt" | tail -120 > "$OUT/logcat-stopapps.txt" || true
 grep -a "StopApps" "$OUT/logcat-full.txt" > "$OUT/stop-run-dbg.txt" || true
 screenshot "stopapps-after.png"
