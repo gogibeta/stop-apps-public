@@ -16,6 +16,7 @@ import com.stopapps.app.ui.HomeScreen
 import com.stopapps.app.ui.HomeViewModel
 import com.stopapps.app.ui.StopAppsTheme
 import com.stopapps.app.ui.WhitelistScreen
+import com.stopapps.app.data.FileLogger
 
 class MainActivity : ComponentActivity() {
 
@@ -26,6 +27,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        FileLogger.log("ui", "MainActivity.onCreate")
         if (Build.VERSION.SDK_INT >= 33) {
             val granted = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.POST_NOTIFICATIONS
@@ -51,7 +53,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        FileLogger.log("ui", "MainActivity.onResume")
         // Re-check the accessibility toggle when coming back from Settings.
         // (The ViewModel's monitor loop also refreshes this periodically.)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        FileLogger.log("ui", "MainActivity.onPause")
     }
 }
