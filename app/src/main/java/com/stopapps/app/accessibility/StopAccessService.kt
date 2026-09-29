@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
+import com.stopapps.app.data.FileLogger
 
 /**
  * Accessibility service that powers the force-stop automation.
@@ -38,11 +39,13 @@ class StopAccessService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        FileLogger.log("a11y", "service CONNECTED (bound by system)")
         // Start quiet: only listen while a run is active.
         setAggressiveMonitoring(false)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        FileLogger.log("a11y", "service UNBOUND by system — automation will stop working until rebound", level = "WARN")
         if (instance === this) instance = null
         return super.onUnbind(intent)
     }
@@ -55,7 +58,9 @@ class StopAccessService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        FileLogger.log("a11y", "service INTERRUPTED by system", level = "WARN")
+    }
 
     /**
      * While a run is active we monitor window-state-changed (32) +
@@ -80,7 +85,9 @@ class StopAccessService : AccessibilityService() {
                 info.notificationTimeout = 0
             }
             serviceInfo = info
-        } catch (_: Exception) {
+            FileLogger.log("a11y", "aggressive monitoring ${if (enabled) "ENABLED" else "DISABLED"} (eventTypes=${info.eventTypes})")
+        } catch (e: Exception) {
+            FileLogger.logException("a11y", "setAggressiveMonitoring($enabled)", e)
         }
     }
 
@@ -88,9 +95,42 @@ class StopAccessService : AccessibilityService() {
     fun updateEventTypes(transform: (Int) -> Int) {
         try {
             val info = serviceInfo ?: return
+            val before = info.eventTypes
             info.eventTypes = transform(info.eventTypes)
             serviceInfo = info
-        } catch (_: Exception) {
+            if (info.eventTypes != before) {
+                FileLogger.log("a11y", "event types $before -> ${info.eventTypes}")
+            }
+        } catch (e: Exception) {
+            FileLogger.logException("a11y", "updateEventTypes", e)
+        }
+    }
+
+    /** Best-effort global BACK press (used to leave Settings after a run). */
+    fun pressBack(): Boolean {
+        return try {
+            val ok = performGlobalAction(GLOBAL_ACTION_BACK)
+            FileLogger.log("a11y", "GLOBAL_ACTION_BACK dispatched, accepted=$ok")
+            ok
+        } catch (e: Exception) {
+            FileLogger.logException("a11y", "pressBack", e)
+            false
+        }
+    }
+
+    /**
+     * Opens the given intent from the accessibility-service context.
+     * A system-bound accessibility service is not subject to the background
+     * activity-start restriction the same way a background app is, so this
+     * is the reliable way to open the next App info screen mid-run.
+     */
+    fun startActivityForAutomation(intent: Intent) {
+        try {
+            startActivity(intent)
+            FileLogger.log("a11y", "startActivity for automation dispatched: ${intent.data}")
+        } catch (e: Exception) {
+            FileLogger.logException("a11y", "startActivityForAutomation", e)
+            throw e
         }
     }
 }
