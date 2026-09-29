@@ -202,8 +202,20 @@ fi
 echo "app process is alive"
 
 echo "=== phase 2a: Select-all UI test ==="
-wait_and_tap "^Select all$" "Select all" 120 || { echo "SELECT-ALL TAP FAILED"; exit 1; }
-STOPLABEL=$(wait_for_text "^Stop [0-9]+ apps$" 120) || { echo "STOP-BUTTON NEVER APPEARED"; exit 1; }
+# Switch to the "All" tab (maximal list) and wait until the app list has
+# actually loaded before touching "Select all". On the slow software
+# emulator the list can take minutes to populate, and tapping "Select all"
+# on an empty list selects nothing, leaving the button at "Stop apps".
+wait_and_tap "^All$" "All filter chip" 120 || { echo "ALL-CHIP TAP FAILED"; exit 1; }
+wait_for_text "^Settings$" 300 > /dev/null || { echo "APP LIST NEVER LOADED"; exit 1; }
+echo "app list loaded"
+STOPLABEL=""
+for _ in 1 2 3; do
+  wait_and_tap "^Select all$" "Select all" 120 || { echo "SELECT-ALL TAP FAILED"; exit 1; }
+  if STOPLABEL=$(wait_for_text "^Stop [0-9]+ apps$" 60); then break; fi
+  echo "stop button not up yet, retrying Select all"
+done
+if [ -z "$STOPLABEL" ]; then echo "STOP-BUTTON NEVER APPEARED"; exit 1; fi
 N=$(echo "$STOPLABEL" | grep -o "[0-9][0-9]*")
 echo "select-all -> '$STOPLABEL' (N=$N)"
 if [ -z "$N" ] || [ "$N" -eq 0 ]; then
