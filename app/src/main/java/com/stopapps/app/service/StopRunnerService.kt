@@ -174,23 +174,30 @@ class StopRunnerService : Service() {
                     // message. BACK closes the App info screen (it was
                     // opened NO_HISTORY) and reveals our MainActivity; the
                     // explicit launch is a fallback.
+                    // Runs in NonCancellable: the service scope can be
+                    // cancelled under us (e.g. the system destroying the
+                    // service right as the run ends), which used to abort
+                    // the return with a JobCancellationException and leave
+                    // the user stuck on the Settings screen.
                     try {
-                        kotlinx.coroutines.delay(800) // let the last OK click land
-                        val svc = StopAccessService.instance
-                        if (svc != null) {
-                            svc.pressBack()
-                            kotlinx.coroutines.delay(600)
-                        }
-                        try {
-                            val home = Intent(applicationContext, MainActivity::class.java)
-                                .setFlags(
-                                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                                        Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                )
-                            startActivity(home)
-                            FileLogger.log("service", "returned to MainActivity after run")
-                        } catch (e: Exception) {
-                            FileLogger.logException("service", "return to MainActivity", e)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            kotlinx.coroutines.delay(800) // let the last OK click land
+                            val svc = StopAccessService.instance
+                            if (svc != null) {
+                                svc.pressBack()
+                                kotlinx.coroutines.delay(600)
+                            }
+                            try {
+                                val home = Intent(applicationContext, MainActivity::class.java)
+                                    .setFlags(
+                                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                                            Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                    )
+                                startActivity(home)
+                                FileLogger.log("service", "returned to MainActivity after run")
+                            } catch (e: Exception) {
+                                FileLogger.logException("service", "return to MainActivity", e)
+                            }
                         }
                     } catch (e: Exception) {
                         FileLogger.logException("service", "return-to-app", e)
