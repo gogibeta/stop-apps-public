@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.stopapps.app.data.FileLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -121,6 +122,15 @@ class ForceStopEngine(private val appContext: Context) {
     fun start(packages: List<String>, turbo: Boolean, listener: Listener): Boolean {
         if (running) return true
         val service = StopAccessService.instance
+        FileLogger.log(
+            "engine", "start requested",
+            data = mapOf(
+                "packages" to packages.size.toString(),
+                "turbo" to turbo.toString(),
+                "service_connected" to (service != null).toString(),
+                "miui" to miui.toString()
+            )
+        )
         if (service == null) {
             listener.onLog("Accessibility service is enabled but not connected yet. Please wait a moment and try again.")
             listener.onFinished(RunResult(emptyList(), packages.toList(), emptyList()))
@@ -181,7 +191,9 @@ class ForceStopEngine(private val appContext: Context) {
             }
             currentPackage = null
             if (running && index < queue.size - 1) {
-                delay(AutomationPolicy.interDelayMs(turbo))
+                val delayMs = AutomationPolicy.interDelayMs(turbo)
+                FileLogger.log("engine", "inter-package delay ${delayMs}ms before ${queue[index + 1]}")
+                delay(delayMs)
             }
         }
         listener?.onProgress(queue.size, queue.size, null)
@@ -226,16 +238,40 @@ class ForceStopEngine(private val appContext: Context) {
                 return PackageOutcome.FAILED to false
             }
             if (signal == AttemptSignal.FORCE_STOP_DISABLED && miui) invalid = true
+            FileLogger.log(
+                "engine", "attempt signal for $pkg",
+                data = mapOf(
+                    "signal" to signal.toString(),
+                    "retried" to retried.toString()
+                )
+            )
             when (val step = nextStep(signal, retried, miui)) {
                 is Step.Terminal -> {
                     if (step.outcome != PackageOutcome.STOPPED) {
                         listener?.onLog("  [dbg] giving up on ${appLabel(pkg)} (signal=$signal)")
                     }
+                    FileLogger.log(
+                        "engine", "package terminal",
+                        data = mapOf(
+                            "pkg" to pkg,
+                            "outcome" to step.outcome.toString(),
+                            "signal" to signal.toString()
+                        )
+                    )
                     return step.outcome to invalid
                 }
                 Step.Retry -> {
                     listener?.onLog("  [dbg] retrying ${appLabel(pkg)} (signal=$signal)")
+                    FileLogger.log(
+                        "engine", "retrying $pkg",
+                        data = mapOf("signal" to signal.toString(), "clearing_handled_windows" to handledWindowIds.size.toString())
+                    )
                     retried = true
+                    // The reopened App info screen may reuse the previous
+                    // window (CLEAR_TOP): without clearing, its events would
+                    // be dropped as already-handled and the retry could
+                    // never see the button.
+                    handledWindowIds.clear()
                     // Loop re-opens the App info screen and tries again.
                 }
             }
@@ -243,17 +279,35 @@ class ForceStopEngine(private val appContext: Context) {
     }
 
     private fun openAppDetails(pkg: String) {
+        // Flags mirror the reference exactly: NEW_TASK | CLEAR_TOP |
+        // EXCLUDE_FROM_RECENTS | NO_HISTORY (1417707520). CLEAR_TOP is
+        // essential: without it, consecutive opens for different packages
+        // can reuse a stale App info screen.
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:$pkg")
+        ).setFlags(1417707520)
+        // Mid-run our app is in the background (a Settings screen is
+        // foreground). On Android 10+ a background app cannot start
+        // activities — with a long inter-package delay the start for the
+        // next package gets silently dropped and the run stalls. Opening
+        // through the system-bound accessibility service does not have
+        // this problem.
+        val service = StopAccessService.instance
+        var usedService = false
         try {
-            // Flags mirror the reference exactly: NEW_TASK | CLEAR_TOP |
-            // EXCLUDE_FROM_RECENTS | NO_HISTORY (1417707520). CLEAR_TOP is
-            // essential: without it, consecutive opens for different packages
-            // can reuse a stale App info screen.
-            val intent = Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:$pkg")
-            ).setFlags(1417707520)
-            appContext.startActivity(intent)
-        } catch (_: Exception) {
+            if (service != null) {
+                service.startActivityForAutomation(intent)
+                usedService = true
+            } else {
+                appContext.startActivity(intent)
+            }
+            FileLogger.log(
+                "engine", "App info opened for $pkg",
+                data = mapOf("via_a11y_service" to usedService.toString())
+            )
+        } catch (e: Exception) {
+            FileLogger.logException("engine", "openAppDetails($pkg)", e)
             attemptSignal?.complete(AttemptSignal.TIMEOUT)
         }
     }
@@ -282,7 +336,26 @@ class ForceStopEngine(private val appContext: Context) {
             type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) return
         val eventPkg = event.packageName?.toString() ?: return
-        if (!isSettingsHost(eventPkg)) return
+        // Trace every monitored event: this is what diagnoses "nothing
+        // happens" stalls — the log shows whether Settings events arrive
+        // at all, and in which stage they are dropped.
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val cls = try { event.className?.toString() } catch (_: Exception) { null }
+            FileLogger.log(
+                "engine", "window-state-changed",
+                data = mapOf(
+                    "pkg" to eventPkg,
+                    "class" to (cls ?: "?"),
+                    "stage" to stage.toString()
+                )
+            )
+        }
+        if (!isSettingsHost(eventPkg)) {
+            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                FileLogger.log("engine", "ignoring non-Settings host: $eventPkg", level = "DEBUG")
+            }
+            return
+        }
         // Like the reference: only the event's own source node, which must
         // be a container from a real window. Leaf sources (a single
         // TextView etc.) cannot contain the button and are dropped.
@@ -638,48 +711,4 @@ class ForceStopEngine(private val appContext: Context) {
             "android:id/button1"
         )
     }
-}
-
-/** Internal signals driving one package attempt. */
-internal enum class AttemptSignal {
-    FORCE_STOP_MISSING,
-    FORCE_STOP_DISABLED,
-    CONFIRM_CLICK_OK,
-    CONFIRM_CLICK_FAILED,
-    CONFIRM_DISABLED,
-    TIMEOUT
-}
-
-/** What the engine should do after an attempt signal. */
-internal sealed interface Step {
-    data class Terminal(val outcome: PackageOutcome) : Step
-    data object Retry : Step
-}
-
-internal enum class PackageOutcome { STOPPED, SKIPPED, FAILED }
-
-/**
- * Pure retry policy, mirroring the reference:
- * - Missing/timeout/click-failure signals get exactly one reopen-and-retry,
- *   then a terminal outcome.
- * - A disabled "Force stop" on MIUI means "already stopped" -> skip.
- */
-internal fun nextStep(
-    signal: AttemptSignal,
-    alreadyRetried: Boolean,
-    isMiui: Boolean
-): Step = when (signal) {
-    AttemptSignal.CONFIRM_CLICK_OK -> Step.Terminal(PackageOutcome.STOPPED)
-    AttemptSignal.FORCE_STOP_DISABLED ->
-        if (isMiui || alreadyRetried) Step.Terminal(PackageOutcome.SKIPPED)
-        else Step.Retry
-    AttemptSignal.CONFIRM_DISABLED ->
-        if (isMiui) Step.Terminal(PackageOutcome.SKIPPED)
-        else if (alreadyRetried) Step.Terminal(PackageOutcome.FAILED)
-        else Step.Retry
-    AttemptSignal.FORCE_STOP_MISSING,
-    AttemptSignal.CONFIRM_CLICK_FAILED,
-    AttemptSignal.TIMEOUT ->
-        if (alreadyRetried) Step.Terminal(PackageOutcome.FAILED)
-        else Step.Retry
 }
