@@ -1,7 +1,6 @@
 package com.stopapps.app.accessibility
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import com.stopapps.app.data.FileLogger
@@ -40,8 +39,13 @@ class StopAccessService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         FileLogger.log("a11y", "service CONNECTED (bound by system)")
-        // Start quiet: only listen while a run is active.
-        setAggressiveMonitoring(false)
+        // NOTE: the event types / flags / notification timeout are declared
+        // statically in accessibility_service_config.xml and are NEVER
+        // changed at runtime. Calling setServiceInfo() at runtime makes the
+        // system unbind (then rebind) the service, which killed automation
+        // on the user's device within a second of every toggle.
+        // The engine ignores events while no run is active, so the static
+        // mask costs nothing when idle.
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -63,47 +67,22 @@ class StopAccessService : AccessibilityService() {
     }
 
     /**
-     * While a run is active we monitor window-state-changed (32) +
-     * view-scrolled (4096), mirroring the reference; the engine additionally
-     * toggles window-content-changed (2048) via [updateEventTypes] while the
-     * "Force stop" button is on screen. Outside a run, event delivery is off.
+     * No-op kept for API compatibility. Event monitoring is configured
+     * statically in accessibility_service_config.xml and never toggled at
+     * runtime: changing AccessibilityService info via setServiceInfo() makes
+     * the system unbind/rebind the service (observed killing automation
+     * within 0.1–0.6 s on the user's vivo). The engine already ignores
+     * events while no run is active.
      */
-    fun setAggressiveMonitoring(enabled: Boolean) {
-        try {
-            val info = serviceInfo ?: AccessibilityServiceInfo()
-            if (enabled) {
-                info.eventTypes =
-                    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                        AccessibilityEvent.TYPE_VIEW_SCROLLED // 4128
-                info.flags =
-                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                        AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS // 80
-                info.notificationTimeout = 100
-            } else {
-                info.eventTypes = 0
-                info.flags = 0
-                info.notificationTimeout = 0
-            }
-            serviceInfo = info
-            FileLogger.log("a11y", "aggressive monitoring ${if (enabled) "ENABLED" else "DISABLED"} (eventTypes=${info.eventTypes})")
-        } catch (e: Exception) {
-            FileLogger.logException("a11y", "setAggressiveMonitoring($enabled)", e)
-        }
+    fun setAggressiveMonitoring(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
+        // Intentionally does nothing; see above.
     }
 
-    /** Applies [transform] to the current event-type mask (engine use only). */
-    fun updateEventTypes(transform: (Int) -> Int) {
-        try {
-            val info = serviceInfo ?: return
-            val before = info.eventTypes
-            info.eventTypes = transform(info.eventTypes)
-            serviceInfo = info
-            if (info.eventTypes != before) {
-                FileLogger.log("a11y", "event types $before -> ${info.eventTypes}")
-            }
-        } catch (e: Exception) {
-            FileLogger.logException("a11y", "updateEventTypes", e)
-        }
+    /**
+     * No-op kept for API compatibility. See [setAggressiveMonitoring].
+     */
+    fun updateEventTypes(@Suppress("UNUSED_PARAMETER") transform: (Int) -> Int) {
+        // Intentionally does nothing; see above.
     }
 
     /** Best-effort global BACK press (used to leave Settings after a run). */
