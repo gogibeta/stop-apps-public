@@ -207,7 +207,10 @@ echo "=== phase 2a: Select-all UI test ==="
 # emulator the list can take minutes to populate, and tapping "Select all"
 # on an empty list selects nothing, leaving the button at "Stop apps".
 wait_and_tap "^All$" "All filter chip" 120 || { echo "ALL-CHIP TAP FAILED"; exit 1; }
-wait_for_text "^Settings$" 300 > /dev/null || { echo "APP LIST NEVER LOADED"; exit 1; }
+# NOTE: "Settings" (com.android.settings) is deliberately NEVER in the list —
+# AutoWhitelist.SYSTEM_PACKAGES excludes it — so wait for a label that is
+# guaranteed on the Google-APIs emulator image instead.
+wait_for_text "^(Chrome|Gmail|YouTube|Maps)$" 300 > /dev/null || { echo "APP LIST NEVER LOADED"; exit 1; }
 echo "app list loaded"
 STOPLABEL=""
 for _ in 1 2 3; do
