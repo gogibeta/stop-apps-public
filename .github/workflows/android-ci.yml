@@ -52,10 +52,11 @@ jobs:
       - name: Run emulator test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 30
           target: google_apis
           arch: x86_64
-          profile: pixel_7
+          profile: pixel_4
+          emulator-options: -no-snapshot-save -noaudio -no-boot-anim
           script: bash ci/emulator-test.sh apk/app-debug.apk
 
       - name: Upload test outputs
