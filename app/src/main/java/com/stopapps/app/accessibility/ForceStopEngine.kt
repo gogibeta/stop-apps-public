@@ -1,5 +1,6 @@
 package com.stopapps.app.accessibility
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -75,7 +76,15 @@ class ForceStopEngine(private val appContext: Context) {
         val failed: List<String>,
         val skipped: List<String>,
         /** Packages the reference records as MIUI-invalid (hidden from the running list). */
-        val invalid: List<String> = emptyList()
+        val invalid: List<String> = emptyList(),
+        /**
+         * Device available-RAM delta (after minus before the run), in bytes.
+         * A best-effort "freed" estimate from ActivityManager; may be <= 0
+         * when the system immediately reuses the memory.
+         */
+        val ramFreedBytes: Long = 0L,
+        /** Wall-clock time the run took, in milliseconds. */
+        val durationMs: Long = 0L
     )
 
     private enum class Stage { IDLE, WAIT_FORCE_STOP, WAIT_CONFIRM }
@@ -169,6 +178,8 @@ class ForceStopEngine(private val appContext: Context) {
     }
 
     private suspend fun runQueue(queue: List<String>) {
+        val t0 = System.currentTimeMillis()
+        val memBefore = availMemBytes()
         val stopped = mutableListOf<String>()
         val failed = mutableListOf<String>()
         val skipped = mutableListOf<String>()
@@ -203,7 +214,30 @@ class ForceStopEngine(private val appContext: Context) {
             }
         }
         listener?.onProgress(queue.size, queue.size, null)
-        listener?.onFinished(RunResult(stopped, failed, skipped, invalid))
+        val ramFreed = availMemBytes().let { after ->
+            if (memBefore > 0 && after > 0) after - memBefore else 0L
+        }
+        val durationMs = System.currentTimeMillis() - t0
+        FileLogger.log(
+            "engine", "run finished",
+            data = mapOf(
+                "ram_freed_mb" to (ramFreed / 1_048_576L).toString(),
+                "duration_s" to (durationMs / 1000L).toString()
+            )
+        )
+        listener?.onFinished(RunResult(stopped, failed, skipped, invalid, ramFreed, durationMs))
+    }
+
+    /** Current device available RAM in bytes, or 0 when unreadable. */
+    private fun availMemBytes(): Long {
+        return try {
+            val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val mi = ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            mi.availMem
+        } catch (_: Exception) {
+            0L
+        }
     }
 
     private fun finish() {
