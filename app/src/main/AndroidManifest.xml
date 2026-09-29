@@ -65,5 +65,16 @@
                 android:value="Automating system App info screens to force-stop user-selected apps via the accessibility service." />
         </service>
 
+        <!-- Shares the persistent diagnostic log.json (Download/Share buttons) -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/filepaths" />
+        </provider>
+
     </application>
 </manifest>
