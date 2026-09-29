@@ -33,7 +33,9 @@ jobs:
 
   emulator-test:
     needs: build
-    runs-on: ubuntu-latest
+    # macOS runners provide hardware acceleration (HVF) for the emulator;
+    # Linux runners have no KVM, so boot takes >10 min and times out.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -52,11 +54,10 @@ jobs:
       - name: Run emulator test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: 35
           target: google_apis
-          arch: x86_64
-          profile: pixel_4
-          emulator-options: -no-snapshot-save -noaudio -no-boot-anim
+          arch: arm64-v8a
+          profile: pixel_7
           script: bash ci/emulator-test.sh apk/app-debug.apk
 
       - name: Upload test outputs
