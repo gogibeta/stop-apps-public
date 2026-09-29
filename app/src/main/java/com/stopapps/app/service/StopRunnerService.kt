@@ -1,0 +1,316 @@
+package com.stopapps.app.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import com.stopapps.app.MainActivity
+import com.stopapps.app.R
+import com.stopapps.app.accessibility.ForceStopEngine
+import com.stopapps.app.accessibility.ForceStopEngineHolder
+import com.stopapps.app.accessibility.StopAccessService
+import com.stopapps.app.data.PrefsStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+
+/**
+ * Foreground service that hosts a stop run so the automation survives while
+ * the Settings app is in the foreground. Shows live progress in its
+ * notification and a summary when done.
+ */
+class StopRunnerService : Service() {
+
+    companion object {
+        const val ACTION_START = "com.stopapps.app.action.START"
+        const val ACTION_CANCEL = "com.stopapps.app.action.CANCEL"
+        const val EXTRA_PACKAGES = "packages"
+        const val EXTRA_TURBO = "turbo"
+
+        private const val CHANNEL_ID = "stop_run"
+        private const val NOTIF_ID = 1001
+
+        fun start(context: Context, packages: List<String>, turbo: Boolean) {
+            val intent = Intent(context, StopRunnerService::class.java).apply {
+                action = ACTION_START
+                putStringArrayListExtra(EXTRA_PACKAGES, ArrayList(packages))
+                putExtra(EXTRA_TURBO, turbo)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= 26) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        fun cancel(context: Context) {
+            try {
+                context.startService(
+                    Intent(context, StopRunnerService::class.java).apply { action = ACTION_CANCEL }
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var engine: ForceStopEngine? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_CANCEL -> {
+                engine?.cancel()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_START -> {
+                val packages =
+                    intent.getStringArrayListExtra(EXTRA_PACKAGES)?.toList() ?: emptyList()
+                val turbo = intent.getBooleanExtra(EXTRA_TURBO, false)
+                if (packages.isEmpty()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (!StopAccessService.isEnabled(this)) {
+                    notifySummary(
+                        getString(R.string.notif_accessibility_needed_title),
+                        getString(R.string.notif_accessibility_needed_text)
+                    )
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                startAsForeground(getString(R.string.notif_starting))
+                beginRun(packages, turbo)
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun beginRun(packages: List<String>, turbo: Boolean) {
+        val eng = ForceStopEngineHolder.engine
+            ?: ForceStopEngine(applicationContext).also { ForceStopEngineHolder.engine = it }
+        engine = eng
+        // Set after eng.start() returns; read by onFinished to decide whether
+        // a genuine run happened (a refused start must not shrink the
+        // running-app detection window).
+        var genuineRun = false
+        val started = eng.start(packages, turbo, object : ForceStopEngine.Listener {
+            override fun onLog(line: String) {
+                RunLog.append(line)
+            }
+
+            override fun onProgress(done: Int, total: Int, currentPackage: String?) {
+                updateProgress(done, total, currentPackage)
+            }
+
+            override fun onFinished(result: ForceStopEngine.RunResult) {
+                scope.launch {
+                    val text = getString(
+                        R.string.notif_done_text,
+                        result.stopped.size,
+                        result.failed.size,
+                        result.skipped.size
+                    )
+                    notifySummary(getString(R.string.notif_done_title), text)
+                    // Record when this run finished: the app list uses it as
+                    // the reference's `last_stopped_time` for MIUI-invalid
+                    // rehabilitation. Only for a genuine run.
+                    // Packages the engine marked MIUI-invalid (disabled
+                    // "Force stop" on MIUI, reference `INVALID_PACK`) are
+                    // persisted as `mi_invalid_packs`: they stay hidden
+                    // from the running list until usage events
+                    // rehabilitate them.
+                    if (genuineRun) {
+                        try {
+                            val store = PrefsStore(applicationContext)
+                            store.setLastStoppedTime(System.currentTimeMillis())
+                            store.addMiInvalidPacks(result.invalid)
+                        } catch (_: Exception) {
+                        }
+                    }
+                    // Keep the summary visible briefly, then stop.
+                    try {
+                        kotlinx.coroutines.delay(4000)
+                    } catch (_: Exception) {
+                    }
+                    engine = null
+                    stopSelf()
+                }
+            }
+        })
+        genuineRun = started
+    }
+
+    private fun startAsForeground(text: String) {
+        val notification = buildNotification(text, null, 0, 0)
+        try {
+            // FOREGROUND_SERVICE_TYPE_SPECIAL_USE exists only on API 34+;
+            // passing its (unknown) type bit on older releases is undefined
+            // behavior, so use the untyped overload there.
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(
+                    NOTIF_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(NOTIF_ID, notification)
+            }
+        } catch (_: Exception) {
+            // As a last resort keep the service running without foreground
+            // state; the run itself does not depend on it.
+        }
+    }
+
+    private fun updateProgress(done: Int, total: Int, currentPackage: String?) {
+        val label = currentPackage?.let { pkg ->
+            try {
+                val ai = packageManager.getApplicationInfo(pkg, 0)
+                packageManager.getApplicationLabel(ai).toString()
+            } catch (_: Exception) {
+                pkg
+            }
+        }
+        val text = if (label != null) {
+            getString(R.string.notif_progress_text, done + 1, total, label)
+        } else {
+            getString(R.string.notif_finishing)
+        }
+        notifyProgress(buildNotification(text, label, done, total))
+    }
+
+    private fun buildNotification(
+        text: String,
+        label: String?,
+        done: Int,
+        total: Int
+    ): Notification {
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val cancelIntent = PendingIntent.getService(
+            this, 1,
+            Intent(this, StopRunnerService::class.java).apply { action = ACTION_CANCEL },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(getString(R.string.notif_title))
+            .setContentText(text)
+            .setContentIntent(openApp)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .addAction(
+                R.drawable.ic_notification,
+                getString(R.string.cancel),
+                cancelIntent
+            )
+        if (total > 0) builder.setProgress(total, done.coerceIn(0, total), false)
+        return builder.build()
+    }
+
+    private fun notifyProgress(notification: Notification) {
+        try {
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIF_ID, notification)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun notifySummary(title: String, text: String) {
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(openApp)
+            .setAutoCancel(true)
+            .build()
+        try {
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIF_ID, notification)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun createChannel() {
+        if (Build.VERSION.SDK_INT < 26) return
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        getString(R.string.notif_channel_name),
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply {
+                        description = getString(R.string.notif_channel_desc)
+                    }
+                )
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    override fun onDestroy() {
+        try {
+            engine?.cancel()
+        } catch (_: Exception) {
+        }
+        scope.cancel()
+        super.onDestroy()
+    }
+}
+
+/** In-memory ring buffer of the current/last run's log lines for the UI. */
+object RunLog {
+    private const val MAX = 400
+    private val lock = Any()
+    private val lines = ArrayDeque<String>()
+
+    @Volatile
+    var version: Long = 0
+        private set
+
+    fun append(line: String) {
+        synchronized(lock) {
+            lines.addLast(line)
+            while (lines.size > MAX) lines.removeFirst()
+            version++
+        }
+    }
+
+    fun snapshot(): List<String> = synchronized(lock) { lines.toList() }
+
+    fun clear() {
+        synchronized(lock) {
+            lines.clear()
+            version++
+        }
+    }
+}
