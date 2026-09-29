@@ -71,7 +71,6 @@ object FileLogger {
             "app", "session started (log.json persists across restarts)",
             level = "INFO",
             data = mapOf(
-                "session" to sessionId,
                 "device" to ("${Build.MANUFACTURER} ${Build.MODEL}"),
                 "android" to Build.VERSION.RELEASE,
                 "sdk" to Build.VERSION.SDK_INT.toString(),
