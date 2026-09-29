@@ -13,8 +13,11 @@ android {
         applicationId = "com.stopapps.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.5.1"
+        versionCode = 9
+        versionName = "1.6.0"
+
+        // Keep only English strings: drops all other locales' resources.
+        resourceConfigurations += "en"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -73,7 +76,8 @@ dependencies {
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
+    // @Preview only — no usages in main source, so debug-only.
+    debugImplementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     // NB: material-icons-extended is intentionally NOT used: it adds ~1 MB of
     // icon classes. Only material-icons-core icons + two tiny local vector
