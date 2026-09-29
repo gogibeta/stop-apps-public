@@ -61,9 +61,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
-    /** Last finished-run summary line, shown as a success card. */
-    private val _lastSummary = MutableStateFlow<String?>(null)
-    val lastSummary: StateFlow<String?> = _lastSummary.asStateFlow()
+    /** Last finished-run summary, shown as the success card. */
+    private val _lastSummary = MutableStateFlow<RunSummary?>(null)
+    val lastSummary: StateFlow<RunSummary?> = _lastSummary.asStateFlow()
 
     /** One-shot toast message for log export results. */
     private val _toastMsg = MutableStateFlow<String?>(null)
@@ -130,7 +130,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                     _logVersion.value = v
                     // Pick up the finished-run marker as a success summary.
                     RunLog.snapshot().lastOrNull { it.startsWith("[dbg] run finished:") }
-                        ?.let { _lastSummary.value = it.removePrefix("[dbg] ") }
+                        ?.removePrefix("[dbg] ")
+                        ?.let { parseRunSummary(it) }
+                        ?.let { _lastSummary.value = it }
                 }
                 _logLines.value = withContext(Dispatchers.IO) { FileLogger.lineCount() }
                 // Refresh access states cheaply while visible.
