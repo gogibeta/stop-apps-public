@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.stopapps.app.MainActivity
 import com.stopapps.app.R
@@ -131,6 +132,12 @@ class StopRunnerService : Service() {
                         result.skipped.size
                     )
                     notifySummary(getString(R.string.notif_done_title), text)
+                    // Machine-readable completion marker for logcat-based
+                    // testing (CI emulator run and on-device debugging).
+                    RunLog.append(
+                        "[dbg] run finished: stopped=${result.stopped.size} " +
+                            "failed=${result.failed.size} skipped=${result.skipped.size}"
+                    )
                     // Record when this run finished: the app list uses it as
                     // the reference's `last_stopped_time` for MIUI-invalid
                     // rehabilitation. Only for a genuine run.
@@ -298,6 +305,12 @@ object RunLog {
         private set
 
     fun append(line: String) {
+        // Mirror every run-log line (including [dbg] engine diagnostics) to
+        // logcat so `adb logcat` captures the full automation trace.
+        try {
+            Log.d("StopApps", line)
+        } catch (_: Exception) {
+        }
         synchronized(lock) {
             lines.addLast(line)
             while (lines.size > MAX) lines.removeFirst()
