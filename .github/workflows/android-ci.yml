@@ -33,9 +33,9 @@ jobs:
 
   emulator-test:
     needs: build
-    # macOS runners provide hardware acceleration (HVF) for the emulator;
-    # Linux runners have no KVM, so boot takes >10 min and times out.
-    runs-on: macos-latest
+    # ARM64 Linux runners run arm64 images natively-ish; x86 Linux and
+    # macOS runners lack KVM/HVF, so x86 emulation exceeds the boot timeout.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +58,7 @@ jobs:
           target: google_apis
           arch: arm64-v8a
           profile: pixel_7
-          script: bash ci/emulator-test.sh apk/app-debug.apk
+          script: bash ci/diag-launch-test.sh ci/fixtures/stop-apps-1.3.1-diag.apk && bash ci/emulator-test.sh apk/app-debug.apk
 
       - name: Upload test outputs
         if: always()
