@@ -33,9 +33,10 @@ jobs:
 
   emulator-test:
     needs: build
-    # ARM64 Linux runners run arm64 images natively-ish; x86 Linux and
-    # macOS runners lack KVM/HVF, so x86 emulation exceeds the boot timeout.
-    runs-on: ubuntu-24.04-arm
+    # x86_64 Linux boots under software emulation in ~8 min (proven by
+    # run 36588032525); give it a generous timeout instead of fighting
+    # for hardware acceleration that hosted runners don't provide.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -56,8 +57,9 @@ jobs:
         with:
           api-level: 35
           target: google_apis
-          arch: arm64-v8a
+          arch: x86_64
           profile: pixel_7
+          emulator-boot-timeout: 1800
           script: bash ci/diag-launch-test.sh ci/fixtures/stop-apps-1.3.1-diag.apk && bash ci/emulator-test.sh apk/app-debug.apk
 
       - name: Upload test outputs
