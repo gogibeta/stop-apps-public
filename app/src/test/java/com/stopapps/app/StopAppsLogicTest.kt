@@ -463,4 +463,48 @@ class StopAppsLogicTest {
         assertFalse(NodeMatchers.isForceStopId("android:id/button1"))
         assertFalse(NodeMatchers.isForceStopId("com.android.settings:id/button1"))
     }
+
+    // ---------- RunSummary: marker round-trip ----------
+
+    @Test
+    fun runMarker_roundTrip() {
+        val marker = com.stopapps.app.ui.formatRunMarker(
+            stopped = 16, failed = 1, skipped = 2,
+            ramFreedBytes = 42L * 1_048_576L, durationMs = 11_000L, turbo = true
+        )
+        val s = com.stopapps.app.ui.parseRunSummary(marker)
+        assertEquals(16, s?.stopped)
+        assertEquals(1, s?.failed)
+        assertEquals(2, s?.skipped)
+        assertEquals(42L * 1_048_576L, s?.ramFreedBytes)
+        assertEquals(11_000L, s?.durationMs)
+        assertEquals(true, s?.turbo)
+    }
+
+    @Test
+    fun runMarker_legacyMarkerStillParses() {
+        // Markers written by older versions had no ram/duration/turbo fields.
+        val s = com.stopapps.app.ui.parseRunSummary("run finished: stopped=16 failed=0 skipped=0")
+        assertEquals(16, s?.stopped)
+        assertEquals(0, s?.failed)
+        assertEquals(0, s?.skipped)
+        assertEquals(0L, s?.ramFreedBytes)
+        assertEquals(0L, s?.durationMs)
+        assertEquals(false, s?.turbo)
+    }
+
+    @Test
+    fun runMarker_rejectsGarbage() {
+        assertEquals(null, com.stopapps.app.ui.parseRunSummary("hello world"))
+        assertEquals(null, com.stopapps.app.ui.parseRunSummary(""))
+    }
+
+    @Test
+    fun formatBytes_units() {
+        assertEquals("42 MB", com.stopapps.app.ui.formatBytes(42L * 1_048_576L))
+        assertEquals("1.50 GB", com.stopapps.app.ui.formatBytes(1_610_612_736L))
+        assertEquals("512 KB", com.stopapps.app.ui.formatBytes(512L * 1024L))
+        // Never negative: a noisy RAM delta is clamped.
+        assertEquals("0 KB", com.stopapps.app.ui.formatBytes(-5L))
+    }
 }
