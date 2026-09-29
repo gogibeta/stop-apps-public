@@ -7,6 +7,7 @@ import com.stopapps.app.accessibility.ForceStopEngineHolder
 import com.stopapps.app.accessibility.StopAccessService
 import com.stopapps.app.data.AppEntry
 import com.stopapps.app.data.AppRepository
+import com.stopapps.app.data.FileLogger
 import com.stopapps.app.data.PrefsStore
 import com.stopapps.app.data.RamInfo
 import com.stopapps.app.service.RunLog
@@ -59,6 +60,18 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
+
+    /** Last finished-run summary line, shown as a success card. */
+    private val _lastSummary = MutableStateFlow<String?>(null)
+    val lastSummary: StateFlow<String?> = _lastSummary.asStateFlow()
+
+    /** One-shot toast message for log export results. */
+    private val _toastMsg = MutableStateFlow<String?>(null)
+    val toastMsg: StateFlow<String?> = _toastMsg.asStateFlow()
+
+    /** Number of lines currently in the persistent log.json. */
+    private val _logLines = MutableStateFlow(0L)
+    val logLines: StateFlow<Long> = _logLines.asStateFlow()
 
     private var monitorJob: Job? = null
 
@@ -113,7 +126,13 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 _running.value = ForceStopEngineHolder.engine?.running == true
                 val v = RunLog.version
-                if (v != _logVersion.value) _logVersion.value = v
+                if (v != _logVersion.value) {
+                    _logVersion.value = v
+                    // Pick up the finished-run marker as a success summary.
+                    RunLog.snapshot().lastOrNull { it.startsWith("[dbg] run finished:") }
+                        ?.let { _lastSummary.value = it.removePrefix("[dbg] ") }
+                }
+                _logLines.value = withContext(Dispatchers.IO) { FileLogger.lineCount() }
                 // Refresh access states cheaply while visible.
                 _a11yEnabled.value = StopAccessService.isEnabled(getApplication())
                 delay(1500)
@@ -183,6 +202,30 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun openUsageSettings() = repo.openUsageAccessSettings()
 
     fun logLines(): List<String> = RunLog.snapshot()
+
+    fun clearSummary() {
+        _lastSummary.value = null
+    }
+
+    fun consumeToast() {
+        _toastMsg.value = null
+    }
+
+    /** Copies the persistent log.json into the public Downloads folder. */
+    fun downloadLog() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val name = FileLogger.copyToDownloads(getApplication())
+            _toastMsg.value = if (name != null)
+                "Log saved to Downloads/$name"
+            else
+                "Could not save the log — nothing recorded yet?"
+        }
+    }
+
+    /** Returns a share intent for log.json (FileProvider), or null. */
+    fun shareLogIntent(): android.content.Intent? {
+        return FileLogger.shareIntent(getApplication())
+    }
 
     override fun onCleared() {
         monitorJob?.cancel()
