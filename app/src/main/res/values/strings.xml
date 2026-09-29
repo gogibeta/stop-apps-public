@@ -55,7 +55,7 @@
     <string name="notif_progress_text">%1$d of %2$d — %3$s</string>
     <string name="notif_finishing">Finishing…</string>
     <string name="notif_done_title">Stop run finished</string>
-    <string name="notif_done_text">%1$d stopped • %2$d failed • %3$d skipped</string>
+    <string name="notif_done_text">%1$d stopped • %2$d failed • %3$d skipped • ≈%4$s RAM freed</string>
     <string name="notif_accessibility_needed_title">Accessibility service is off</string>
     <string name="notif_accessibility_needed_text">Enable the Stop Apps accessibility service, then start the run again.</string>
     <string name="cancel">Cancel</string>
