@@ -68,6 +68,12 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_7
+          # 2026-09-30: 4 GB RAM for the AVD. Run 36636567833 wedged
+          # system_server ("Process system isn't responding") for ~50 min on
+          # the software emulator; more headroom + the hardened test harness
+          # (adb timeouts, ANR escalation, wedged-system recovery) should
+          # stop a wedged framework from killing the run.
+          ram-size: 4096M
           emulator-boot-timeout: 1800
           # NOTE: the 1.3.1-diag fixture APK was retired 2026-09-30: it was built
           # with the old manual kotlinc+d8 pipeline and crashes on launch with
