@@ -69,7 +69,12 @@ jobs:
           arch: x86_64
           profile: pixel_7
           emulator-boot-timeout: 1800
-          script: bash ci/diag-launch-test.sh ci/fixtures/stop-apps-1.3.1-diag.apk && bash ci/emulator-test.sh apk/app-debug.apk
+          # NOTE: the 1.3.1-diag fixture APK was retired 2026-09-30: it was built
+          # with the old manual kotlinc+d8 pipeline and crashes on launch with
+          # missing androidx.startup.R$string (this CI run reproduced the
+          # user's "instantly crashing" report and root-caused it). The
+          # Gradle-built APK under test does not have this problem.
+          script: bash ci/emulator-test.sh apk/app-debug.apk
 
       - name: Upload test outputs
         if: always()
