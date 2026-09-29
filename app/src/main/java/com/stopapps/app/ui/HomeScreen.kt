@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -72,7 +73,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stopapps.app.R
 import com.stopapps.app.data.AppEntry
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -449,42 +449,104 @@ private fun RunControls(
 }
 
 @Composable
-private fun ResultCard(summary: String, onDismiss: () -> Unit) {
+private fun ResultCard(summary: RunSummary, onDismiss: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Filled.CheckCircle,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                modifier = Modifier.size(28.dp)
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Run finished",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer
+        Column(Modifier.fillMaxWidth().padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (summary.stopped == 1) "1 app stopped"
+                        else "${summary.stopped} apps stopped",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        "in ${summary.durationMs / 1000}s" +
+                            if (summary.turbo) " • Turbo mode" else "",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                            .copy(alpha = 0.75f)
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Dismiss",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                ResultStat(
+                    value = "${summary.stopped}",
+                    label = "Stopped",
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
-                Text(
-                    summary,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                ResultStat(
+                    value = "≈${formatBytes(summary.ramFreedBytes)}",
+                    label = "RAM freed",
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+                ResultStat(
+                    value = "${summary.durationMs / 1000}s",
+                    label = "Time taken",
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
-            IconButton(onClick = onDismiss) {
-                Icon(
-                    Icons.Filled.KeyboardArrowUp,
-                    contentDescription = "Dismiss",
-                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+            if (summary.failed > 0 || summary.skipped > 0) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "${summary.failed} failed • ${summary.skipped} skipped",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                        .copy(alpha = 0.7f)
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ResultStat(value: String, label: String, color: androidx.compose.ui.graphics.Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            value,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.ExtraBold,
+            color = color,
+            maxLines = 1
+        )
+        Text(
+            label,
+            fontSize = 12.sp,
+            color = color.copy(alpha = 0.75f)
+        )
     }
 }
 
@@ -658,13 +720,4 @@ private fun Drawable.toBitmap(): Bitmap? {
     } catch (_: Exception) {
         null
     }
-}
-
-private fun formatBytes(bytes: Long): String {
-    val gb = bytes / 1_073_741_824.0
-    if (gb >= 1) return String.format(Locale.US, "%.2f GB", gb)
-    val mb = bytes / 1_048_576.0
-    if (mb >= 1) return String.format(Locale.US, "%.0f MB", mb)
-    val kb = bytes / 1024.0
-    return String.format(Locale.US, "%.0f KB", kb)
 }
