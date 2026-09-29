@@ -19,6 +19,8 @@ import com.stopapps.app.accessibility.ForceStopEngineHolder
 import com.stopapps.app.accessibility.StopAccessService
 import com.stopapps.app.data.FileLogger
 import com.stopapps.app.data.PrefsStore
+import com.stopapps.app.ui.formatBytes
+import com.stopapps.app.ui.formatRunMarker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -134,14 +136,22 @@ class StopRunnerService : Service() {
                         R.string.notif_done_text,
                         result.stopped.size,
                         result.failed.size,
-                        result.skipped.size
+                        result.skipped.size,
+                        formatBytes(result.ramFreedBytes)
                     )
                     notifySummary(getString(R.string.notif_done_title), text)
-                    // Machine-readable completion marker for logcat-based
-                    // testing (CI emulator run and on-device debugging).
+                    // Machine-readable completion marker for the UI card and
+                    // logcat-based testing (CI emulator run and on-device
+                    // debugging).
                     RunLog.append(
-                        "[dbg] run finished: stopped=${result.stopped.size} " +
-                            "failed=${result.failed.size} skipped=${result.skipped.size}"
+                        "[dbg] " + formatRunMarker(
+                            result.stopped.size,
+                            result.failed.size,
+                            result.skipped.size,
+                            result.ramFreedBytes,
+                            result.durationMs,
+                            turbo
+                        )
                     )
                     FileLogger.log(
                         "service", "run finished",
@@ -149,7 +159,9 @@ class StopRunnerService : Service() {
                             "stopped" to result.stopped.size.toString(),
                             "failed" to result.failed.size.toString(),
                             "skipped" to result.skipped.size.toString(),
-                            "invalid" to result.invalid.size.toString()
+                            "invalid" to result.invalid.size.toString(),
+                            "ram_freed_mb" to (result.ramFreedBytes / 1_048_576L).toString(),
+                            "duration_s" to (result.durationMs / 1000L).toString()
                         )
                     )
                     // Record when this run finished: the app list uses it as
