@@ -73,6 +73,34 @@ class AppRepository(private val context: Context) {
     }
 
     /**
+     * Packages with a MOVE_TO_FOREGROUND event in the last 24h.
+     * Refines the "running" signal: FLAG_STOPPED alone marks dead apps as
+     * running, while getRunningAppProcesses() is restricted on Android 7+
+     * and would hide everything. A recent foreground event is the best
+     * available "likely alive" signal without root.
+     */
+    private fun recentlyForegroundedPkgs(): Set<String> {
+        if (!hasUsageAccess()) return emptySet()
+        return try {
+            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            val now = System.currentTimeMillis()
+            val events = usm.queryEvents(now - 24 * 60 * 60 * 1000L, now)
+            val out = HashSet<String>()
+            val ev = android.app.usage.UsageEvents.Event()
+            while (events.hasNextEvent()) {
+                events.getNextEvent(ev)
+                if (ev.eventType == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                    val pkg = ev.packageName
+                    if (!pkg.isNullOrEmpty()) out += pkg
+                }
+            }
+            out
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
+    /**
      * Loads every enabled, launchable app minus:
      * - this app, the default launcher, the active keyboard
      * - [AutoWhitelist.SYSTEM_PACKAGES]
@@ -179,6 +207,13 @@ class AppRepository(private val context: Context) {
             ::hasLaunchIntent
         ).toHashSet()
 
+        // Refine with recent foreground events: FLAG_STOPPED alone marks
+        // dead apps as running. If usage access is granted, require a
+        // MOVE_TO_FOREGROUND in the last 24h; otherwise fall back to the
+        // FLAG_STOPPED candidate set (best available without usage access).
+        val foregroundedPkgs = recentlyForegroundedPkgs()
+        val useForegroundFilter = foregroundedPkgs.isNotEmpty()
+
         // ---- running processes -> per-package PSS (best effort) ----
         val ramByPkg = mutableMapOf<String, Long>()
         try {
@@ -245,20 +280,22 @@ class AppRepository(private val context: Context) {
                     null
                 }
                 val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                // isRunning requires a LIVE process right now, not just a
-                // clear FLAG_STOPPED bit. The bit is only set on explicit
-                // force-stop, so bit-only classification falsely marks apps
-                // as running when the system killed them for memory or they
-                // were never started. ramByPkg comes from
-                // ActivityManager.getRunningAppProcesses(), i.e. processes
-                // that actually exist at list time.
-                val hasLiveProcess = ramByPkg.containsKey(pkg)
+                // isRunning: FLAG_STOPPED-clear candidate AND (recent
+                // foreground event if usage access is available). FLAG_STOPPED
+                // alone falsely marks dead apps as running; the foreground
+                // filter removes apps the system killed or that never started.
+                val inCandidateSet = pkg in runningPkgs
+                val isRunning = if (useForegroundFilter) {
+                    inCandidateSet && pkg in foregroundedPkgs
+                } else {
+                    inCandidateSet
+                }
                 out += AppEntry(
                     packageName = pkg,
                     label = label,
                     icon = icon,
                     isSystem = isSystem,
-                    isRunning = pkg in runningPkgs && hasLiveProcess,
+                    isRunning = isRunning,
                     ramKb = ramByPkg[pkg] ?: 0L,
                     lastUsed = lastUsedByPkg[pkg] ?: 0L
                 )
