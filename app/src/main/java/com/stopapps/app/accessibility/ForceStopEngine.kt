@@ -27,10 +27,13 @@ import kotlinx.coroutines.withTimeout
  * The automation mirrors the publicly observable behavior of the reference
  * app (AppSleep 2.4, reverse-engineered for interoperability):
  *
- * - Only window-state-changed (32) + view-scrolled (4096) events are
- *   monitored; window-content-changed (2048) is enabled while the "Force
- *   stop" button is on screen and disabled after the confirmation is
- *   clicked.
+ * - Only window-state-changed (32) + view-scrolled (4096) +
+ *   window-content-changed (2048) events are monitored. The full mask is
+ *   declared statically in accessibility_service_config.xml and NEVER
+ *   changed at runtime: calling setServiceInfo() at runtime makes the
+ *   system unbind/rebind the service, which killed automation within
+ *   0.1–0.6 s on the user's vivo (log analysis 2026-09-30). Events are
+ *   ignored while no run is active.
  * - The node tree is scanned from `event.source` (the node that changed),
  *   exactly like the reference; `rootInActiveWindow` is only a fallback.
  * - "Force stop" is matched by the *localized* Settings strings for the
@@ -142,7 +145,10 @@ class ForceStopEngine(private val appContext: Context) {
         handledWindowIds.clear()
         forceStopTextCache.clear()
         stage = Stage.IDLE
-        service.setAggressiveMonitoring(true)
+        // Event monitoring is static (see StopAccessService): the full mask
+        // is declared in XML and never toggled, because runtime
+        // setServiceInfo() unbinds the service. Events are ignored here
+        // while running == false.
         val queue = AutomationPolicy.orderQueue(packages.toList())
         job = scope.launch {
             try {
@@ -205,10 +211,7 @@ class ForceStopEngine(private val appContext: Context) {
         currentPackage = null
         stage = Stage.IDLE
         attemptSignal = null
-        try {
-            StopAccessService.instance?.setAggressiveMonitoring(false)
-        } catch (_: Exception) {
-        }
+        // No runtime service-info toggle (see start()).
     }
 
     // ------------------------------------------------------------ one package
@@ -328,9 +331,10 @@ class ForceStopEngine(private val appContext: Context) {
     fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (!running) return
         val type = event.eventType
-        // The run monitors window-state-changed (32) + view-scrolled (4096);
-        // window-content-changed (2048) is toggled on while the "Force stop"
-        // button is on screen.
+        // The static XML mask delivers window-state-changed (32) +
+        // view-scrolled (4096) + window-content-changed (2048); the
+        // content-changed events let the confirmation dialog be observed
+        // the moment it appears.
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             type != AccessibilityEvent.TYPE_VIEW_SCROLLED &&
             type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
@@ -409,11 +413,11 @@ class ForceStopEngine(private val appContext: Context) {
                 return
             }
             listener?.onLog("  [dbg] Force-stop button found, clicking")
-            // From here on, watch content changes so the confirmation dialog
-            // is observed the moment it appears.
-            service.updateEventTypes(AutomationPolicy::withContentChanged)
+            // Content-change events are part of the static XML mask, so the
+            // confirmation dialog is observed the moment it appears — no
+            // runtime toggle needed (runtime toggles unbind the service).
             scope.launch {
-                delay(AutomationPolicy.PRE_FORCE_STOP_DELAY_MS)
+                delay(AutomationPolicy.preForceStopDelayMs(turbo))
                 val clickResult = try {
                     withContext(Dispatchers.Main) {
                         button.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -468,12 +472,8 @@ class ForceStopEngine(private val appContext: Context) {
                 return
             }
             listener?.onLog("  [dbg] OK button found, clicking")
-            // Dialog button found: content events are no longer needed.
-            try {
-                StopAccessService.instance
-                    ?.updateEventTypes(AutomationPolicy::withoutContentChanged)
-            } catch (_: Exception) {
-            }
+            // Content-change events stay in the static mask for the whole
+            // run; no runtime toggle (toggles unbind the service).
             stage = Stage.IDLE
             scope.launch {
                 delay(AutomationPolicy.preClickDelayMs(turbo))
