@@ -17,6 +17,7 @@ import com.stopapps.app.R
 import com.stopapps.app.accessibility.ForceStopEngine
 import com.stopapps.app.accessibility.ForceStopEngineHolder
 import com.stopapps.app.accessibility.StopAccessService
+import com.stopapps.app.data.FileLogger
 import com.stopapps.app.data.PrefsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +78,10 @@ class StopRunnerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        FileLogger.log(
+            "service", "onStartCommand",
+            data = mapOf("action" to (intent?.action ?: "null"))
+        )
         when (intent?.action) {
             ACTION_CANCEL -> {
                 engine?.cancel()
@@ -138,6 +143,15 @@ class StopRunnerService : Service() {
                         "[dbg] run finished: stopped=${result.stopped.size} " +
                             "failed=${result.failed.size} skipped=${result.skipped.size}"
                     )
+                    FileLogger.log(
+                        "service", "run finished",
+                        data = mapOf(
+                            "stopped" to result.stopped.size.toString(),
+                            "failed" to result.failed.size.toString(),
+                            "skipped" to result.skipped.size.toString(),
+                            "invalid" to result.invalid.size.toString()
+                        )
+                    )
                     // Record when this run finished: the app list uses it as
                     // the reference's `last_stopped_time` for MIUI-invalid
                     // rehabilitation. Only for a genuine run.
@@ -153,6 +167,33 @@ class StopRunnerService : Service() {
                             store.addMiInvalidPacks(result.invalid)
                         } catch (_: Exception) {
                         }
+                    }
+                    // Return the user to the app. After the last OK click we are
+                    // sitting on the last App info screen, so without this
+                    // the user is left staring at Settings with no success
+                    // message. BACK closes the App info screen (it was
+                    // opened NO_HISTORY) and reveals our MainActivity; the
+                    // explicit launch is a fallback.
+                    try {
+                        kotlinx.coroutines.delay(800) // let the last OK click land
+                        val svc = StopAccessService.instance
+                        if (svc != null) {
+                            svc.pressBack()
+                            kotlinx.coroutines.delay(600)
+                        }
+                        try {
+                            val home = Intent(applicationContext, MainActivity::class.java)
+                                .setFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                )
+                            startActivity(home)
+                            FileLogger.log("service", "returned to MainActivity after run")
+                        } catch (e: Exception) {
+                            FileLogger.logException("service", "return to MainActivity", e)
+                        }
+                    } catch (e: Exception) {
+                        FileLogger.logException("service", "return-to-app", e)
                     }
                     // Keep the summary visible briefly, then stop.
                     try {
@@ -309,6 +350,12 @@ object RunLog {
         // logcat so `adb logcat` captures the full automation trace.
         try {
             Log.d("StopApps", line)
+        } catch (_: Exception) {
+        }
+        // …and to the persistent log.json so the whole history survives
+        // app restarts and can be downloaded from the app.
+        try {
+            FileLogger.log("run", line)
         } catch (_: Exception) {
         }
         synchronized(lock) {
