@@ -10,15 +10,15 @@ package com.stopapps.app.accessibility
  * - Per-package watchdog: 8 seconds.
  * - Inter-package delay: 1000 ms normally, 0 ms in turbo mode.
  * - Delay before clicking the confirmation ("OK") button: 100 ms normally,
- *   50 ms in turbo mode.
- * - Delay before clicking "Force stop": 100 ms.
+ *   25 ms in turbo mode.
+ * - Delay before clicking "Force stop": 100 ms normally, 50 ms in turbo mode.
  * - `com.android.chrome` is moved to the end of the stop queue.
  *
- * Event-type handling mirrors the reference as well: while idle the service
- * listens only to window-state-changed (32) + view-scrolled (4096); when the
- * "Force stop" button is found, window-content-changed (2048) is enabled so
- * the confirmation dialog is observed, and it is disabled again after the
- * confirmation button is clicked.
+ * Event-type handling: the service declares the full mask
+ * (window-state-changed + view-scrolled + window-content-changed) statically
+ * in accessibility_service_config.xml with notificationTimeout=0, so events
+ * arrive immediately instead of being throttled to one batch per 100 ms.
+ * The mask is never changed at runtime (runtime changes unbind the service).
  */
 object AutomationPolicy {
 
@@ -35,10 +35,13 @@ object AutomationPolicy {
     const val NORMAL_PRE_CLICK_DELAY_MS = 100L
 
     /** Delay before clicking the confirmation button, turbo mode. */
-    const val TURBO_PRE_CLICK_DELAY_MS = 50L
+    const val TURBO_PRE_CLICK_DELAY_MS = 25L
 
-    /** Fixed delay before clicking "Force stop". */
-    const val PRE_FORCE_STOP_DELAY_MS = 100L
+    /** Delay before clicking "Force stop", normal mode. */
+    const val NORMAL_PRE_FORCE_STOP_DELAY_MS = 100L
+
+    /** Delay before clicking "Force stop", turbo mode. */
+    const val TURBO_PRE_FORCE_STOP_DELAY_MS = 50L
 
     const val EVENT_WINDOW_STATE_CHANGED = 32
     const val EVENT_WINDOW_CONTENT_CHANGED = 2048
@@ -57,6 +60,10 @@ object AutomationPolicy {
     /** Pre-confirmation-click delay for the current mode. */
     fun preClickDelayMs(turbo: Boolean): Long =
         if (turbo) TURBO_PRE_CLICK_DELAY_MS else NORMAL_PRE_CLICK_DELAY_MS
+
+    /** Pre-force-stop-click delay for the current mode. */
+    fun preForceStopDelayMs(turbo: Boolean): Long =
+        if (turbo) TURBO_PRE_FORCE_STOP_DELAY_MS else NORMAL_PRE_FORCE_STOP_DELAY_MS
 
     /** Enable window-content-changed events on the given event-type mask. */
     fun withContentChanged(eventTypes: Int): Int =
