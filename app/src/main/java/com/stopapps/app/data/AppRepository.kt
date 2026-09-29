@@ -219,8 +219,9 @@ class AppRepository(private val context: Context) {
             }
         }
 
-        // ---- entries: enabled + launchable, minus exclusions/safety ----
-        // isRunning is the strict reference filter (FLAG_STOPPED clear).
+        // entries: enabled + launchable, minus exclusions/safety.
+        // isRunning additionally requires a live process (see below); the
+        // FLAG_STOPPED-only filter is the reference's candidate set.
         val out = ArrayList<AppEntry>(installed.size)
         for (ai in installed) {
             try {
@@ -244,12 +245,20 @@ class AppRepository(private val context: Context) {
                     null
                 }
                 val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                // isRunning requires a LIVE process right now, not just a
+                // clear FLAG_STOPPED bit. The bit is only set on explicit
+                // force-stop, so bit-only classification falsely marks apps
+                // as running when the system killed them for memory or they
+                // were never started. ramByPkg comes from
+                // ActivityManager.getRunningAppProcesses(), i.e. processes
+                // that actually exist at list time.
+                val hasLiveProcess = ramByPkg.containsKey(pkg)
                 out += AppEntry(
                     packageName = pkg,
                     label = label,
                     icon = icon,
                     isSystem = isSystem,
-                    isRunning = pkg in runningPkgs,
+                    isRunning = pkg in runningPkgs && hasLiveProcess,
                     ramKb = ramByPkg[pkg] ?: 0L,
                     lastUsed = lastUsedByPkg[pkg] ?: 0L
                 )
