@@ -91,8 +91,17 @@ fun HomeScreen(
     val a11y by vm.a11yEnabled.collectAsState()
     val query by vm.query.collectAsState()
     val logVersion by vm.logVersion.collectAsState()
+    val lastSummary by vm.lastSummary.collectAsState()
+    val toastMsg by vm.toastMsg.collectAsState()
+    val logLineCount by vm.logLines.collectAsState()
     var showLog by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(AppFilter.RUNNING) }
+
+    // One-shot toast for log export results.
+    toastMsg?.let { msg ->
+        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+        vm.consumeToast()
+    }
 
     val visible = remember(apps, query, filter) {
         apps.filter { e ->
@@ -168,13 +177,37 @@ fun HomeScreen(
                 )
             }
 
+            // ---- success card (last finished run) ----
+            if (!running && lastSummary != null) {
+                item {
+                    ResultCard(
+                        summary = lastSummary!!,
+                        onDismiss = vm::clearSummary
+                    )
+                }
+            }
+
             // ---- log panel ----
             if (logLines.isNotEmpty() || running) {
                 item {
                     LogPanel(
                         lines = logLines,
                         expanded = showLog,
-                        onToggle = { showLog = !showLog }
+                        onToggle = { showLog = !showLog },
+                        persistentCount = logLineCount,
+                        onDownload = vm::downloadLog,
+                        onShare = {
+                            try {
+                                vm.shareLogIntent()?.let {
+                                    context.startActivity(
+                                        Intent.createChooser(it, "Share log.json").apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                    )
+                                }
+                            } catch (_: Exception) {
+                            }
+                        }
                     )
                 }
             }
@@ -416,7 +449,54 @@ private fun RunControls(
 }
 
 @Composable
-private fun LogPanel(lines: List<String>, expanded: Boolean, onToggle: () -> Unit) {
+private fun ResultCard(summary: String, onDismiss: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Run finished",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Text(
+                    summary,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Dismiss",
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LogPanel(
+    lines: List<String>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    persistentCount: Long,
+    onDownload: () -> Unit,
+    onShare: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
             Row(
@@ -426,13 +506,33 @@ private fun LogPanel(lines: List<String>, expanded: Boolean, onToggle: () -> Uni
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    stringResource(R.string.run_log, lines.size),
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.run_log, lines.size),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (persistentCount > 0) {
+                        Text(
+                            "Saved log: $persistentCount lines (all sessions)",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Icon(if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, null)
             }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = onDownload, modifier = Modifier.weight(1f)) {
+                    Text("Download log.json")
+                }
+                OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) {
+                    Text("Share")
+                }
+            }
+            Spacer(Modifier.height(12.dp))
             if (expanded) {
                 Column(
                     modifier = Modifier
