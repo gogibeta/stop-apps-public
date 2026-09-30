@@ -53,6 +53,10 @@ import kotlinx.coroutines.withTimeout
  *   stopped this way: it is recorded as MIUI-invalid (reference
  *   `INVALID_PACK`), skipped, and hidden from the running list until usage
  *   events rehabilitate it.
+ * - If the system unbinds the accessibility service mid-run (vivo battery
+ *   management kills background apps), the in-flight attempt completes with
+ *   SERVICE_LOST and the engine waits up to 15 s for the rebind, then
+ *   retries the package instead of failing it.
  * - Both clicks are fire-and-forget like the reference: the click result is
  *   not checked and there is no post-click verification. Once "OK" is
  *   clicked the attempt counts as stopped.
@@ -105,6 +109,13 @@ class ForceStopEngine(private val appContext: Context) {
     private var stage = Stage.IDLE
     private var targetPkg = ""
     private var attemptSignal: CompletableDeferred<AttemptSignal>? = null
+    /**
+     * Signalled by [onServiceRebound] when the accessibility service
+     * rebinds after an [onServiceUnbound] mid-run. Created fresh for each
+     * unbind so a stale completion can never fake a rebind.
+     */
+    @Volatile
+    private var rebindSignal: CompletableDeferred<Unit>? = null
 
     private val handledWindowIds = mutableSetOf<Int>()
     private val forceStopTextCache = mutableMapOf<String, Set<String>>()
@@ -245,7 +256,36 @@ class ForceStopEngine(private val appContext: Context) {
         currentPackage = null
         stage = Stage.IDLE
         attemptSignal = null
+        rebindSignal = null
         // No runtime service-info toggle (see start()).
+    }
+
+    // ------------------------------------------- accessibility-service state
+
+    /**
+     * Called by [StopAccessService.onUnbind] when the system unbinds the
+     * accessibility service (vivo battery management kills background apps,
+     * which tears the service down mid-run). If a package attempt is in
+     * flight, the attempt is completed with [AttemptSignal.SERVICE_LOST] so
+     * the run loop waits for the rebind instead of failing the package on a
+     * dead attempt. Runs on the main thread, like all service callbacks.
+     */
+    fun onServiceUnbound() {
+        val s = attemptSignal
+        if (!running || s == null || s.isCompleted) return
+        FileLogger.log("engine", "service unbound mid-run, waiting for rebind")
+        listener?.onLog("  [dbg] service unbound mid-run, waiting for rebind")
+        rebindSignal = CompletableDeferred()
+        s.complete(AttemptSignal.SERVICE_LOST)
+    }
+
+    /**
+     * Called by [StopAccessService.onServiceConnected] when the service
+     * (re)binds. Wakes the [onServiceUnbound] wait in the run loop, if any.
+     */
+    fun onServiceRebound() {
+        val rs = rebindSignal ?: return
+        if (!rs.isCompleted) rs.complete(Unit)
     }
 
     // ------------------------------------------------------------ one package
@@ -282,6 +322,36 @@ class ForceStopEngine(private val appContext: Context) {
                     "retried" to retried.toString()
                 )
             )
+            if (signal == AttemptSignal.SERVICE_LOST) {
+                // The accessibility service was torn down mid-attempt
+                // (vivo battery management). Wait for the rebind, then
+                // restart this package's attempt from scratch.
+                val rs = rebindSignal
+                val rebound = if (rs == null) {
+                    false
+                } else try {
+                    withTimeout(REBIND_WAIT_MS) { rs.await() }
+                    true
+                } catch (_: TimeoutCancellationException) {
+                    false
+                } catch (_: CancellationException) {
+                    return PackageOutcome.FAILED to false
+                }
+                rebindSignal = null
+                if (rebound && running) {
+                    listener?.onLog("  [dbg] service rebound, retrying ${appLabel(pkg)}")
+                    FileLogger.log("engine", "service rebound, retrying $pkg")
+                    retried = true
+                    handledWindowIds.clear()
+                    continue
+                }
+                listener?.onLog("  [dbg] service did not rebind in time, failing ${appLabel(pkg)}")
+                FileLogger.log(
+                    "engine", "service rebind timed out",
+                    data = mapOf("pkg" to pkg)
+                )
+                return PackageOutcome.FAILED to false
+            }
             when (val step = nextStep(signal, retried, miui)) {
                 is Step.Terminal -> {
                     if (step.outcome != PackageOutcome.STOPPED) {
@@ -744,5 +814,7 @@ class ForceStopEngine(private val appContext: Context) {
             "com.android.settings:id/button1",
             "android:id/button1"
         )
+        /** How long to wait for the accessibility service to rebind after a mid-run unbind. */
+        private const val REBIND_WAIT_MS = 15000L
     }
 }
