@@ -64,6 +64,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Install libpulse0 for the emulator
+        # 2026-09-30: the emulator's qemu binary links libpulse.so.0 at
+        # process startup, but the ubuntu runner image no longer ships it.
+        # Even with -noaudio, boots died instantly with "error while loading
+        # shared libraries: libpulse.so.0" (run 36698061497), then the job
+        # sat in a 30-min boot timeout. No emulator flag can avoid a
+        # DT_NEEDED library — it has to be installed. Once per job covers
+        # the retry step too (same runner machine).
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpulse0
+
       - name: Run emulator test
         id: emulator_test
         # Let the retry step below decide: a retryable infra flake
