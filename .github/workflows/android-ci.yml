@@ -72,9 +72,14 @@ jobs:
         # sat in a 30-min boot timeout. No emulator flag can avoid a
         # DT_NEEDED library — it has to be installed. Once per job covers
         # the retry step too (same runner machine).
+        # 2026-09-30 (run 36710697785): emulator 37.x fatals at startup with
+        # "Could not load the Qt platform plugin xcb ... no Qt platform
+        # plugin could be initialized" and never boots. libxcb-cursor0 is
+        # what the warning itself asks for; more importantly we now pass
+        # -no-window so the Qt UI never starts on the headless runner.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libpulse0
+          sudo apt-get install -y -qq libpulse0 libxcb-cursor0
 
       - name: Run emulator test
         id: emulator_test
@@ -96,8 +101,13 @@ jobs:
           ram-size: 4096M
           # UI-test hygiene on a slow emulator: kill animations (fewer timing
           # flakes) and skip snapshot load (a known source of wedged boots).
+          # 2026-09-30: -no-window is REQUIRED on the headless runner —
+          # without it emulator 37.x fatals at startup ("no Qt platform
+          # plugin could be initialized") and the job burns a 30-min boot
+          # timeout (run 36710697785). -gpu swiftshader_indirect keeps
+          # software GLES working without a window.
           disable-animations: true
-          emulator-options: -no-snapshot -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           emulator-boot-timeout: 1800
           # NOTE: the 1.3.1-diag fixture APK was retired 2026-09-30: it was built
           # with the old manual kotlinc+d8 pipeline and crashes on launch with
@@ -130,7 +140,7 @@ jobs:
           profile: pixel_7
           ram-size: 4096M
           disable-animations: true
-          emulator-options: -no-snapshot -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           emulator-boot-timeout: 1800
           # Separate output dir so the retry's diagnostics don't clobber
           # the first attempt's.
