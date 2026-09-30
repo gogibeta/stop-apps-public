@@ -10,8 +10,8 @@ package com.stopapps.app.accessibility
  * - Per-package watchdog: 8 seconds.
  * - Inter-package delay: 1000 ms normally, 0 ms in turbo mode.
  * - Delay before clicking the confirmation ("OK") button: 100 ms normally,
- *   25 ms in turbo mode.
- * - Delay before clicking "Force stop": 100 ms normally, 50 ms in turbo mode.
+ *   0 ms in turbo mode.
+ * - Delay before clicking "Force stop": 100 ms normally, 0 ms in turbo mode.
  * - `com.android.chrome` is moved to the end of the stop queue.
  *
  * Event-type handling: the service declares the full mask
@@ -35,13 +35,13 @@ object AutomationPolicy {
     const val NORMAL_PRE_CLICK_DELAY_MS = 100L
 
     /** Delay before clicking the confirmation button, turbo mode. */
-    const val TURBO_PRE_CLICK_DELAY_MS = 25L
+    const val TURBO_PRE_CLICK_DELAY_MS = 0L
 
     /** Delay before clicking "Force stop", normal mode. */
     const val NORMAL_PRE_FORCE_STOP_DELAY_MS = 100L
 
     /** Delay before clicking "Force stop", turbo mode. */
-    const val TURBO_PRE_FORCE_STOP_DELAY_MS = 50L
+    const val TURBO_PRE_FORCE_STOP_DELAY_MS = 0L
 
     const val EVENT_WINDOW_STATE_CHANGED = 32
     const val EVENT_WINDOW_CONTENT_CHANGED = 2048
