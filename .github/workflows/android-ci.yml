@@ -107,11 +107,20 @@ jobs:
           script: bash ci/emulator-test.sh apk/app-debug.apk
 
       - name: Retry emulator test on fresh emulator (infra flake only)
-        # Fires only when the first attempt died on infrastructure
-        # (adb lost / device never usable -> ci/out/RETRYABLE), never on a
-        # genuine test failure. Each runner step boots its own emulator, so
-        # this is a full recreate, not a resume of the dead one.
-        if: steps.emulator_test.outcome == 'failure' && hashFiles('ci/out/RETRYABLE') != ''
+        # Fires only when the first attempt died on infrastructure, never on
+        # a genuine test failure. Two infra shapes:
+        #   1. the test script ran but adb died (script leaves ci/out/RETRYABLE);
+        #   2. the emulator-runner action itself failed at boot (run 36702422694:
+        #      30-min "Timeout waiting for emulator to boot", device never
+        #      appeared), so the script never ran and ci/out is empty.
+        # A genuine failure (script ran, wrote logs, no RETRYABLE/TEST_OK)
+        # still goes straight to the Verdict step and fails honestly.
+        # Each runner step boots its own emulator, so this is a full
+        # recreate, not a resume of the dead one.
+        if: >
+          steps.emulator_test.outcome == 'failure' &&
+          (hashFiles('ci/out/RETRYABLE') != '' ||
+           (hashFiles('ci/out/TEST_OK') == '' && hashFiles('ci/out/**') == ''))
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
