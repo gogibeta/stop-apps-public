@@ -18,11 +18,14 @@
 # Settings. It cannot reproduce MIUI-specific Settings UI behavior.
 #
 # RETRY CONTRACT with the workflow: on success the script writes
-# $OUT/TEST_OK. On environmental failure (adb lost / device never usable)
-# it writes $OUT/RETRYABLE and exits 75 (EX_TEMPFAIL); the workflow then
-# boots a FRESH emulator and retries the test phase once. A genuine test
-# failure (app crash, engine never engaged) exits 1 with no marker, and
-# the workflow fails honestly after at most 2 attempts.
+# $OUT/TEST_OK. On environmental failure (adb lost / device never usable /
+# a wait starved by system ANRs — "System UI isn't responding" dialogs
+# eating most of the wait's polls so the tap target never had a chance to
+# render) it writes $OUT/RETRYABLE and exits 75 (EX_TEMPFAIL); the workflow
+# then boots a FRESH emulator and retries the test phase once. A genuine
+# test failure (app crash, engine never engaged, tap target genuinely
+# missing on a healthy system) exits 1 with no marker, and the workflow
+# fails honestly after at most 2 attempts.
 set -u
 
 APK="${1:?usage: emulator-test.sh <apk>}"
@@ -184,6 +187,21 @@ save_crash() {
 # recover (soft reboot, else full reboot + app relaunch).
 WEDGED_STREAK=0
 
+# Polls in the CURRENT wait_* call that saw a wedged system (system ANR
+# dialog or a dump timeout). If a wait times out while a large share of its
+# polls were spent fighting system dialogs, the wait was starved by infra,
+# not by a missing tap target: mark the run RETRYABLE so the workflow boots
+# a fresh emulator instead of failing honestly on an environmental flake.
+SYS_WEDGED_POLLS=0
+
+# True when the current wait was starved by system ANRs: at least 3 polls
+# saw a wedged system and at least half of all polls did. Callers check this
+# on wait timeout to choose RETRYABLE (exit 75) over a hard failure.
+wait_starved_by_system() {
+  local tries="$1"
+  [ "$SYS_WEDGED_POLLS" -ge 3 ] && [ $((SYS_WEDGED_POLLS * 2)) -ge "$tries" ]
+}
+
 # Bring the device back after a wedged system_server: wait for the framework
 # to answer again (soft reboot follows the ANR dialog's "Close app"), else
 # fall back to a full `adb reboot`; then relaunch our app (any reboot kills
@@ -233,6 +251,7 @@ dismiss_system_dialogs() {
   if ! ui_dump; then
     echo "WARN: ui dump timed out - system looks wedged"
     WEDGED_STREAK=$((WEDGED_STREAK + 1))
+    SYS_WEDGED_POLLS=$((SYS_WEDGED_POLLS + 1))
   else
     if ! grep -q "isn't responding" "$OUT/ui-dump.xml"; then
       WEDGED_STREAK=0
@@ -241,6 +260,7 @@ dismiss_system_dialogs() {
     local title
     title=$(grep -o 'text="[^"]*isn'"'"'t responding"' "$OUT/ui-dump.xml" | head -1)
     echo "system ANR dialog: $title"
+    SYS_WEDGED_POLLS=$((SYS_WEDGED_POLLS + 1))
     if [[ "$title" == *"Stop Apps"* ]]; then
       echo "APP ANR — our app is not responding"
       return 1
@@ -271,9 +291,13 @@ dismiss_system_dialogs() {
 }
 
 # Poll for a tap target up to timeout_s, dismissing system dialogs.
+# If the wait times out while starved by system ANRs, the run is marked
+# RETRYABLE (exit 75) instead of failing: the tap target never had a
+# chance to render on a wedged framework.
 wait_and_tap() {
   local pattern="$1" desc="$2" timeout_s="$3"
   local tries=$((timeout_s / 5))
+  SYS_WEDGED_POLLS=0
   for _ in $(seq 1 "$tries"); do
     if app_crashed; then
       echo "APP CRASHED (logcat)"
@@ -286,14 +310,22 @@ wait_and_tap() {
     fi
     sleep 5
   done
+  if wait_starved_by_system "$tries"; then
+    echo "WAIT STARVED BY SYSTEM ANRs ($SYS_WEDGED_POLLS/$tries polls) - environmental, marking RETRYABLE"
+    touch "$OUT/RETRYABLE"
+    exit 75
+  fi
   echo "TAP TARGET NOT FOUND after ${timeout_s}s: $desc (see ui-dump.xml)"
   return 1
 }
 
 # Poll for a node whose text matches; prints its text. Returns 1 on timeout.
+# Same starvation rule as wait_and_tap: a system-ANR-starved wait is
+# RETRYABLE, not a genuine missing-label failure.
 wait_for_text() {
   local pattern="$1" timeout_s="$2"
   local tries=$((timeout_s / 5))
+  SYS_WEDGED_POLLS=0
   for _ in $(seq 1 "$tries"); do
     dismiss_system_dialogs || return 1
     ui_dump || { sleep 5; continue; }
@@ -304,6 +336,11 @@ wait_for_text() {
     fi
     sleep 5
   done
+  if wait_starved_by_system "$tries"; then
+    echo "WAIT STARVED BY SYSTEM ANRs ($SYS_WEDGED_POLLS/$tries polls) - environmental, marking RETRYABLE"
+    touch "$OUT/RETRYABLE"
+    exit 75
+  fi
   return 1
 }
 
@@ -344,9 +381,17 @@ wait_for_text "^(Chrome|Gmail|YouTube|Maps)$" 300 > /dev/null || { echo "APP LIS
 echo "app list loaded"
 STOPLABEL=""
 for _ in 1 2 3; do
-  wait_and_tap "^Select all$" "Select all" 120 || { echo "SELECT-ALL TAP FAILED"; exit 1; }
-  if STOPLABEL=$(wait_for_text "^Stop [0-9]+ apps$" 60); then break; fi
-  echo "stop button not up yet, retrying Select all"
+  if wait_and_tap "^Select all$" "Select all" 120; then
+    if STOPLABEL=$(wait_for_text "^Stop [0-9]+ apps$" 60); then break; fi
+    # wait_for_text runs in a subshell, so its exit 75 can't propagate;
+    # the RETRYABLE marker it left is the signal: bail out to the retry.
+    [ -f "$OUT/RETRYABLE" ] && exit 75
+    echo "stop button not up yet, retrying Select all"
+  else
+    # Genuine miss (not system starvation — that exits 75 above): the tap
+    # target really wasn't there; retry the tap itself before giving up.
+    echo "select-all tap attempt missed, retrying"
+  fi
 done
 if [ -z "$STOPLABEL" ]; then echo "STOP-BUTTON NEVER APPEARED"; exit 1; fi
 N=$(echo "$STOPLABEL" | grep -o "[0-9][0-9]*")
