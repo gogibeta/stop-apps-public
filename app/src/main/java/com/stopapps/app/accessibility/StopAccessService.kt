@@ -39,6 +39,9 @@ class StopAccessService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         FileLogger.log("a11y", "service CONNECTED (bound by system)")
+        // Wake the engine: it may be waiting for this rebind after a
+        // mid-run unbind (vivo battery management).
+        ForceStopEngineHolder.engine?.onServiceRebound()
         // NOTE: the event types / flags / notification timeout are declared
         // statically in accessibility_service_config.xml and are NEVER
         // changed at runtime. Calling setServiceInfo() at runtime makes the
@@ -51,6 +54,9 @@ class StopAccessService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         FileLogger.log("a11y", "service UNBOUND by system — automation will stop working until rebound", level = "WARN")
         if (instance === this) instance = null
+        // Tell the engine so a mid-run attempt waits for the rebind instead
+        // of failing on a dead attempt.
+        ForceStopEngineHolder.engine?.onServiceUnbound()
         return super.onUnbind(intent)
     }
 
