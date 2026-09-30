@@ -16,21 +16,76 @@
 # EXCEPTION whose "Process:" line is our package fails the run.
 # NOTE: this validates the full automation pipeline end-to-end on AOSP
 # Settings. It cannot reproduce MIUI-specific Settings UI behavior.
+#
+# RETRY CONTRACT with the workflow: on success the script writes
+# $OUT/TEST_OK. On environmental failure (adb lost / device never usable)
+# it writes $OUT/RETRYABLE and exits 75 (EX_TEMPFAIL); the workflow then
+# boots a FRESH emulator and retries the test phase once. A genuine test
+# failure (app crash, engine never engaged) exits 1 with no marker, and
+# the workflow fails honestly after at most 2 attempts.
 set -u
 
 APK="${1:?usage: emulator-test.sh <apk>}"
-OUT="ci/out"
+# OUT_DIR is set by CI for the retry attempt (fresh emulator) so its
+# diagnostics don't clobber the first attempt's.
+OUT="${OUT_DIR:-ci/out}"
 mkdir -p "$OUT"
 
 PKG="com.stopapps.app"
 SVC="com.stopapps.app/com.stopapps.app.accessibility.StopAccessService"
 MAIN="$PKG/com.stopapps.app.MainActivity"
 
+# Any nonzero exit with a dead adb device (exit 224 / offline / missing)
+# is environmental, not a test result: leave a RETRYABLE marker so the
+# workflow boots a fresh emulator and tries once more instead of failing.
+on_exit() {
+  local code=$?
+  if [ "$code" -ne 0 ] && [ ! -f "$OUT/TEST_OK" ] \
+     && [ "$(timeout 20 adb get-state 2>/dev/null | tr -d '\r')" != "device" ]; then
+    echo "device lost at exit (code $code) - marking run RETRYABLE"
+    touch "$OUT/RETRYABLE"
+  fi
+}
+trap on_exit EXIT
+
 # adb that can never hang forever. A wedged system_server makes plain adb
 # block indefinitely (notably `uiautomator dump`), which turns every poll
 # loop glacial — the script's own timeouts stop being enforced. 120s is
 # generous for a healthy-but-slow software emulator (dumps take ~2-5s).
 tadb() { timeout 120 adb "$@"; }
+
+# ---------- pre-flight: make sure adb actually has a live device ----------
+# The runner waits for boot, but on software emulation adb can lose the
+# device right after boot (exit 224 / "offline"). Probe in stages; if the
+# device never becomes usable, exit retryable so the workflow boots a
+# fresh emulator instead of failing on infra.
+preflight() {
+  echo "=== adb pre-flight ==="
+  local i state
+  for i in $(seq 1 60); do
+    if timeout 30 adb wait-for-device > /dev/null 2>&1; then break; fi
+    sleep 10
+  done
+  for i in $(seq 1 60); do
+    state=$(timeout 30 adb get-state 2>/dev/null | tr -d '\r')
+    [ "$state" = "device" ] && break
+    # nudge a half-dead adb server back to life
+    timeout 30 adb reconnect > /dev/null 2>&1 || true
+    sleep 10
+  done
+  for i in $(seq 1 60); do
+    if [ "$(timeout 30 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] \
+       && timeout 30 adb shell pm path android > /dev/null 2>&1; then
+      echo "pre-flight OK: device online, boot completed, package manager alive"
+      return 0
+    fi
+    sleep 10
+  done
+  echo "PRE-FLIGHT FAILED: no usable adb device after ~30 min"
+  touch "$OUT/RETRYABLE"
+  exit 75
+}
+preflight
 
 echo "=== installing $APK ==="
 timeout 600 adb install -r "$APK"
@@ -370,4 +425,5 @@ if app_crashed; then
   exit 1
 fi
 
+touch "$OUT/TEST_OK"
 echo "EMULATOR TEST OK"
