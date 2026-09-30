@@ -23,10 +23,10 @@
 # eating most of the wait's polls so the tap target never had a chance to
 # render, or an app ANR dialog seen while the framework is/was wedged
 # (starvation, not an app bug)) it writes $OUT/RETRYABLE and exits 75 (EX_TEMPFAIL); the workflow
-# then boots a FRESH emulator and retries the test phase once. A genuine
+# then boots a FRESH emulator and retries the test phase up to twice. A genuine
 # test failure (app crash, engine never engaged, tap target genuinely
 # missing on a healthy system) exits 1 with no marker, and the workflow
-# fails honestly after at most 2 attempts.
+# fails honestly after at most 3 attempts.
 set -u
 
 APK="${1:?usage: emulator-test.sh <apk>}"
@@ -457,8 +457,12 @@ echo "=== phase 2b: real single-app stop run ==="
 # Use the "All" tab so the target app is listed regardless of running state.
 wait_and_tap "^All$" "All filter chip" 60 || echo "WARN: All chip not found, continuing"
 # Tap the search field and try candidates until one is listed.
+# 2026-10-01: the workflow now boots the AOSP (no-GMS) image, which has no
+# Chrome/Gmail/Maps/YouTube — fall back to stock AOSP apps (Calculator,
+# Clock, Contacts, Files, Messaging, Music) so the phase works on both
+# image flavors.
 TARGET=""
-for CAND in Chrome Gmail Maps YouTube; do
+for CAND in Chrome Gmail Maps YouTube Calculator Clock Contacts Files Messaging Music; do
   wait_and_tap "^Search apps" "search field" 60 || { echo "SEARCH FIELD NOT FOUND"; exit 1; }
   # Clear any previous query, then type the candidate.
   for _ in $(seq 1 30); do tadb shell input keyevent 67; done
