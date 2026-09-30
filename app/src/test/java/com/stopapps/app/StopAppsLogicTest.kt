@@ -123,15 +123,15 @@ class StopAppsLogicTest {
     }
 
     @Test
-    fun policy_preClickDelay_normalIs100_turboIs25() {
+    fun policy_preClickDelay_normalIs100_turboIs0() {
         assertEquals(100L, AutomationPolicy.preClickDelayMs(false))
-        assertEquals(25L, AutomationPolicy.preClickDelayMs(true))
+        assertEquals(0L, AutomationPolicy.preClickDelayMs(true))
     }
 
     @Test
-    fun policy_preForceStopDelay_normalIs100_turboIs50() {
+    fun policy_preForceStopDelay_normalIs100_turboIs0() {
         assertEquals(100L, AutomationPolicy.preForceStopDelayMs(false))
-        assertEquals(50L, AutomationPolicy.preForceStopDelayMs(true))
+        assertEquals(0L, AutomationPolicy.preForceStopDelayMs(true))
     }
 
     // ---------- AutomationPolicy: event types ----------
