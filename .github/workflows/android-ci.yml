@@ -45,10 +45,10 @@ jobs:
     # x86_64 Linux boots under software emulation in ~8 min (proven by
     # run 36588032525); give it a generous timeout instead of fighting
     # for hardware acceleration that hosted runners don't provide.
-    # Two emulator attempts max (initial + one fresh-emulator retry on
+    # Three emulator attempts max (initial + two fresh-emulator retries on
     # infra flake): the job timeout below bounds the whole thing.
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 220
     steps:
       - uses: actions/checkout@v4
 
@@ -90,7 +90,15 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
-          target: google_apis
+          # 2026-10-01 (run 36764947234): target default = AOSP without GMS.
+          # Both attempts of that run wedged system_server, with GMS/phone
+          # processes dominating the ANR list (gms.persistent, gms,
+          # googlequicksearchbox, inputmethod.latin, com.google.android.as,
+          # nexuslauncher) plus RoleControllerService monitor contention.
+          # The app under test needs no Google services, so drop GMS
+          # entirely for a lighter, less contention-prone framework on the
+          # KVM-less software-emulation runner.
+          target: default
           arch: x86_64
           profile: pixel_7
           # 2026-09-30: 4 GB RAM for the AVD. Run 36636567833 wedged
@@ -117,6 +125,7 @@ jobs:
           script: bash ci/emulator-test.sh apk/app-debug.apk
 
       - name: Retry emulator test on fresh emulator (infra flake only)
+        id: emulator_test_retry1
         # Fires only when the first attempt died on infrastructure, never on
         # a genuine test failure. Two infra shapes:
         #   1. the test script ran but adb died (script leaves ci/out/RETRYABLE);
@@ -135,7 +144,8 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
-          target: google_apis
+          # AOSP without GMS: see the target note on the first attempt.
+          target: default
           arch: x86_64
           profile: pixel_7
           ram-size: 4096M
@@ -146,6 +156,34 @@ jobs:
           # the first attempt's.
           script: OUT_DIR=ci/out-retry bash ci/emulator-test.sh apk/app-debug.apk
 
+      - name: Second retry on fresh emulator (infra flake only)
+        id: emulator_test_retry2
+        # Fires only when the first retry ALSO died on infrastructure and no
+        # attempt produced TEST_OK. A genuine failure in either attempt fails
+        # honestly at the Verdict step instead. Each runner step boots its
+        # own emulator, so this is another full recreate.
+        if: >
+          steps.emulator_test_retry1.outcome == 'failure' &&
+          hashFiles('ci/out/TEST_OK') == '' &&
+          hashFiles('ci/out-retry/TEST_OK') == '' &&
+          (hashFiles('ci/out-retry/RETRYABLE') != '' ||
+           hashFiles('ci/out-retry/**') == '')
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          # AOSP without GMS: see the target note on the first attempt.
+          target: default
+          arch: x86_64
+          profile: pixel_7
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-boot-timeout: 1800
+          # Separate output dir so this retry's diagnostics don't clobber
+          # the earlier attempts'.
+          script: OUT_DIR=ci/out-retry2 bash ci/emulator-test.sh apk/app-debug.apk
+
       - name: Upload test outputs
         if: always()
         uses: actions/upload-artifact@v4
@@ -154,13 +192,13 @@ jobs:
           path: ci/out*/
 
       - name: Verdict
-        # The test passes iff either attempt wrote TEST_OK. One retry max:
-        # a second RETRYABLE still fails honestly here.
+        # The test passes iff any attempt wrote TEST_OK. Two retries max:
+        # a third RETRYABLE still fails honestly here.
         if: always()
         run: |
-          if [ -f ci/out/TEST_OK ] || [ -f ci/out-retry/TEST_OK ]; then
+          if [ -f ci/out/TEST_OK ] || [ -f ci/out-retry/TEST_OK ] || [ -f ci/out-retry2/TEST_OK ]; then
             echo "emulator test passed"
           else
-            echo "emulator test failed (no TEST_OK from either attempt)"
+            echo "emulator test failed (no TEST_OK from three attempts)"
             exit 1
           fi
