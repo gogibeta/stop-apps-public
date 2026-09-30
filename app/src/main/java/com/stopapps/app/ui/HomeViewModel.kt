@@ -135,8 +135,15 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                         ?.let { _lastSummary.value = it }
                 }
                 _logLines.value = withContext(Dispatchers.IO) { FileLogger.lineCount() }
-                // Refresh access states cheaply while visible.
-                _a11yEnabled.value = StopAccessService.isEnabled(getApplication())
+                // Refresh access states while visible. isEnabled() is a
+                // Settings.Secure content-resolver query (binder IPC to
+                // system_server): it must NOT run on the main thread. On a
+                // slow/wedged emulator one stalled query blocks the UI thread
+                // past the 5s ANR threshold ("Stop Apps isn't responding",
+                // CI run 36730997082).
+                _a11yEnabled.value = withContext(Dispatchers.IO) {
+                    StopAccessService.isEnabled(getApplication())
+                }
                 delay(1500)
             }
         }
