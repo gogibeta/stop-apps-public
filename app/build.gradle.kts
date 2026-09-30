@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 9
-        versionName = "1.6.0-diag" // diag branch only: self-logging test build
+        versionName = "1.6.0"
 
         // Keep only English strings: drops all other locales' resources.
         resourceConfigurations += "en"
