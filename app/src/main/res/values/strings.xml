@@ -31,7 +31,6 @@
     <string name="grant">Grant</string>
     <string name="open_settings">Open settings</string>
     <string name="allow">Allow</string>
-    <string name="setup_battery">Battery unrestricted — Vivo phones turn off accessibility for battery-optimized apps. Tap Allow below, then also set: Settings > Battery > Background power consumption > Stop Apps > Don\'t restrict.</string>
 
     <!-- Run controls -->
     <string name="turbo_title">Turbo mode</string>

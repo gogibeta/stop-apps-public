@@ -18,6 +18,7 @@ import com.stopapps.app.accessibility.ForceStopEngine
 import com.stopapps.app.accessibility.ForceStopEngineHolder
 import com.stopapps.app.accessibility.StopAccessService
 import com.stopapps.app.data.FileLogger
+import com.stopapps.app.data.FileLog
 import com.stopapps.app.data.PrefsStore
 import com.stopapps.app.ui.formatBytes
 import com.stopapps.app.ui.formatRunMarker
@@ -375,6 +376,12 @@ object RunLog {
         // app restarts and can be downloaded from the app.
         try {
             FileLogger.log("run", line)
+        } catch (_: Exception) {
+        }
+        // …and to the diag runlog-*.txt in the app's external files dir so
+        // the user can pull the full trace off the phone without adb.
+        try {
+            FileLog.append(line)
         } catch (_: Exception) {
         }
         synchronized(lock) {

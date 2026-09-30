@@ -2,7 +2,6 @@ package com.stopapps.app.ui
 
 import android.app.Application
 import android.content.Context
-import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.stopapps.app.accessibility.ForceStopEngineHolder
@@ -60,14 +59,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val _a11yEnabled = MutableStateFlow(false)
     val a11yEnabled: StateFlow<Boolean> = _a11yEnabled.asStateFlow()
 
-    /**
-     * True when the app is exempt from battery optimizations. Defaults to
-     * true so the setup card does not flash before the first check
-     * completes.
-     */
-    private val _batteryUnrestricted = MutableStateFlow(true)
-    val batteryUnrestricted: StateFlow<Boolean> = _batteryUnrestricted.asStateFlow()
-
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
@@ -106,24 +97,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         _hasUsageAccess.value = withContext(Dispatchers.IO) { repo.hasUsageAccess() }
         _a11yEnabled.value = withContext(Dispatchers.IO) {
             StopAccessService.isEnabled(getApplication())
-        }
-        _batteryUnrestricted.value = withContext(Dispatchers.IO) { isBatteryUnrestricted() }
-    }
-
-    /**
-     * True when the app is exempt from battery optimizations. Vivo battery
-     * management kills battery-optimized background apps, which tears down
-     * the accessibility service mid-run — so the setup card nags when this
-     * is false. Returns true when the state cannot be determined, so we do
-     * not nag on devices where the query is unavailable.
-     */
-    private fun isBatteryUnrestricted(): Boolean {
-        return try {
-            val app = getApplication<Application>()
-            val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
-            pm.isIgnoringBatteryOptimizations(app.packageName)
-        } catch (_: Exception) {
-            true
         }
     }
 
@@ -169,14 +142,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 _logLines.value = withContext(Dispatchers.IO) { FileLogger.lineCount() }
-                // Refresh access states while visible. isEnabled() and
-                // isIgnoringBatteryOptimizations() are Settings.Secure /
-                // PowerManager binder IPC to system_server: they must NOT
+                // Refresh access states while visible. isEnabled() is a
+                // Settings.Secure binder IPC to system_server: it must NOT
                 // run on the main thread.
                 _a11yEnabled.value = withContext(Dispatchers.IO) {
                     StopAccessService.isEnabled(getApplication())
                 }
-                _batteryUnrestricted.value = withContext(Dispatchers.IO) { isBatteryUnrestricted() }
                 delay(1500)
             }
         }

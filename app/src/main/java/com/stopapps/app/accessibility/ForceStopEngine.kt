@@ -814,7 +814,11 @@ class ForceStopEngine(private val appContext: Context) {
             "com.android.settings:id/button1",
             "android:id/button1"
         )
-        /** How long to wait for the accessibility service to rebind after a mid-run unbind. */
-        private const val REBIND_WAIT_MS = 15000L
+        /**
+         * How long to wait for the accessibility service to rebind after a
+         * mid-run unbind. Phone logs show vivo rebinds in 6-56 s; 60 s
+         * covers the observed range without hanging forever.
+         */
+        private const val REBIND_WAIT_MS = 60000L
     }
 }
