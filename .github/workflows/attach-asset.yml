@@ -1,0 +1,27 @@
+name: Attach file to release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.6.0)'
+        required: true
+      path:
+        description: 'Repo path of the file to attach'
+        required: true
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -lh "${{ inputs.path }}"
+          gh release upload "${{ inputs.tag }}" "${{ inputs.path }}" --clobber
+          gh release view "${{ inputs.tag }}" --json assets -q '.assets[] | [.name, .size] | @tsv'
