@@ -202,6 +202,28 @@ wait_starved_by_system() {
   [ "$SYS_WEDGED_POLLS" -ge 3 ] && [ $((SYS_WEDGED_POLLS * 2)) -ge "$tries" ]
 }
 
+# Set to 1 once recover_wedged_system has brought the framework back in this
+# attempt. A system_server soft/full reboot mid-test can poison emulator
+# state (hung PackageManager, app scan stuck on splash) in ways the test
+# cannot distinguish from a real app bug: the framework answers polls again
+# but the app never progresses. Waits that time out AFTER such a recovery
+# are therefore treated as environmental (RETRYABLE -> fresh emulator)
+# rather than honest failures. Run 36739856425 is the motivating case:
+# Settings ANR -> Close app -> framework back, then the app list never
+# loaded in 44 min on the poisoned emulator.
+WEDGED_RECOVERED=0
+
+# A wait that timed out after a wedge recovery is environmental, not a test
+# verdict. Mark RETRYABLE so the workflow retries on a fresh emulator, and
+# keep a logcat snapshot in the artifacts for human diagnosis.
+env_after_wedge() {
+  local msg="$1"
+  echo "$msg - after a wedge recovery: environmental, marking RETRYABLE"
+  tadb logcat -d > "$OUT/logcat-retryable.txt" 2>/dev/null || true
+  touch "$OUT/RETRYABLE"
+  exit 75
+}
+
 # Bring the device back after a wedged system_server: wait for the framework
 # to answer again (soft reboot follows the ANR dialog's "Close app"), else
 # fall back to a full `adb reboot`; then relaunch our app (any reboot kills
@@ -229,8 +251,14 @@ recover_wedged_system() {
   fi
   if [ -z "$ok" ]; then
     echo "DEVICE UNRECOVERABLE"
-    return 1
+    # A dead emulator is pure infra: retry on a fresh one.
+    touch "$OUT/RETRYABLE"
+    exit 75
   fi
+  # The framework answers again, but emulator state may be poisoned (hung
+  # PackageManager, stuck app scan): subsequent wait timeouts are
+  # environmental, not app failures. See WEDGED_RECOVERED.
+  WEDGED_RECOVERED=1
   echo "framework back - relaunching app"
   tadb shell am start -n "$MAIN" > /dev/null 2>&1 || true
   sleep 10
@@ -315,6 +343,9 @@ wait_and_tap() {
     touch "$OUT/RETRYABLE"
     exit 75
   fi
+  if [ "$WEDGED_RECOVERED" = "1" ]; then
+    env_after_wedge "TAP TARGET NOT FOUND after ${timeout_s}s: $desc (post-wedge)"
+  fi
   echo "TAP TARGET NOT FOUND after ${timeout_s}s: $desc (see ui-dump.xml)"
   return 1
 }
@@ -340,6 +371,9 @@ wait_for_text() {
     echo "WAIT STARVED BY SYSTEM ANRs ($SYS_WEDGED_POLLS/$tries polls) - environmental, marking RETRYABLE"
     touch "$OUT/RETRYABLE"
     exit 75
+  fi
+  if [ "$WEDGED_RECOVERED" = "1" ]; then
+    env_after_wedge "WAIT TIMEOUT after ${timeout_s}s (post-wedge): $pattern"
   fi
   return 1
 }
