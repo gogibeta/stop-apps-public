@@ -6,6 +6,8 @@ package com.stopapps.app.accessibility
  * - Missing/timeout/click-failure signals get exactly one reopen-and-retry,
  *   then a terminal outcome.
  * - A disabled "Force stop" on MIUI means "already stopped" -> skip.
+ * - SERVICE_LOST (accessibility service unbound mid-attempt) is mapped like
+ *   a timeout here; the engine intercepts it first to wait for the rebind.
  *
  * Kept in its own file (no Android dependencies) so it can be unit-tested
  * on the JVM.
@@ -18,7 +20,13 @@ internal enum class AttemptSignal {
     CONFIRM_CLICK_OK,
     CONFIRM_CLICK_FAILED,
     CONFIRM_DISABLED,
-    TIMEOUT
+    TIMEOUT,
+    /**
+     * The accessibility service was unbound by the system mid-attempt
+     * (e.g. vivo battery management killing the background app). The
+     * engine waits for the rebind instead of failing blindly.
+     */
+    SERVICE_LOST
 }
 
 /** What the engine should do after an attempt signal. */
@@ -45,6 +53,7 @@ internal fun nextStep(
         else Step.Retry
     AttemptSignal.FORCE_STOP_MISSING,
     AttemptSignal.CONFIRM_CLICK_FAILED,
+    AttemptSignal.SERVICE_LOST,
     AttemptSignal.TIMEOUT ->
         if (alreadyRetried) Step.Terminal(PackageOutcome.FAILED)
         else Step.Retry
