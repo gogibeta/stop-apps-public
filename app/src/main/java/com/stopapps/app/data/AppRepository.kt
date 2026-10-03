@@ -73,34 +73,6 @@ class AppRepository(private val context: Context) {
     }
 
     /**
-     * Packages with a MOVE_TO_FOREGROUND event in the last 24h.
-     * Refines the "running" signal: FLAG_STOPPED alone marks dead apps as
-     * running, while getRunningAppProcesses() is restricted on Android 7+
-     * and would hide everything. A recent foreground event is the best
-     * available "likely alive" signal without root.
-     */
-    private fun recentlyForegroundedPkgs(): Set<String> {
-        if (!hasUsageAccess()) return emptySet()
-        return try {
-            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-            val now = System.currentTimeMillis()
-            val events = usm.queryEvents(now - 24 * 60 * 60 * 1000L, now)
-            val out = HashSet<String>()
-            val ev = android.app.usage.UsageEvents.Event()
-            while (events.hasNextEvent()) {
-                events.getNextEvent(ev)
-                if (ev.eventType == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                    val pkg = ev.packageName
-                    if (!pkg.isNullOrEmpty()) out += pkg
-                }
-            }
-            out
-        } catch (_: Exception) {
-            emptySet()
-        }
-    }
-
-    /**
      * Loads every enabled, launchable app minus:
      * - this app, the default launcher, the active keyboard
      * - [AutoWhitelist.SYSTEM_PACKAGES]
@@ -109,11 +81,9 @@ class AppRepository(private val context: Context) {
      *   usage since the last stop run rehabilitated them)
      *
      * An app counts as "running" exactly like the reference app (AppSleep
-     * 2.4, method `v2.c.c`): `PackageManager.getInstalledApplications(0)`
-     * filtered to packages that are enabled, do NOT have the
-     * `FLAG_STOPPED` bit set, and have a launch intent. There is no
-     * usage-recency window — windowing is what caused the 7-vs-16 count
-     * mismatch against the reference.
+     * 2.4, decompiled `v2.C2671c.a`): `PackageManager.getInstalledApplications(0)`
+     * filtered to packages that are enabled and have a launch intent. The
+     * reference loop has no FLAG_STOPPED check and no usage-recency window.
      *
      * Per-app RAM comes from the process list and is best-effort: the OS
      * restricts process visibility, so many running apps report 0 kB.
@@ -198,21 +168,13 @@ class AppRepository(private val context: Context) {
             installed.map {
                 RunningClassifier.InstalledApp(
                     packageName = it.packageName ?: "",
-                    enabled = it.enabled,
-                    flags = it.flags
+                    enabled = it.enabled
                 )
             },
             exclusions,
             AutoWhitelist.SYSTEM_PACKAGES,
             ::hasLaunchIntent
         ).toHashSet()
-
-        // Refine with recent foreground events: FLAG_STOPPED alone marks
-        // dead apps as running. If usage access is granted, require a
-        // MOVE_TO_FOREGROUND in the last 24h; otherwise fall back to the
-        // FLAG_STOPPED candidate set (best available without usage access).
-        val foregroundedPkgs = recentlyForegroundedPkgs()
-        val useForegroundFilter = foregroundedPkgs.isNotEmpty()
 
         // ---- running processes -> per-package PSS (best effort) ----
         val ramByPkg = mutableMapOf<String, Long>()
@@ -255,8 +217,9 @@ class AppRepository(private val context: Context) {
         }
 
         // entries: enabled + launchable, minus exclusions/safety.
-        // isRunning additionally requires a live process (see below); the
-        // FLAG_STOPPED-only filter is the reference's candidate set.
+        // isRunning matches the reference exactly: in the candidate set
+        // (enabled, launchable, not excluded). No FLAG_STOPPED check, no
+        // usage-recency window — the reference has neither.
         val out = ArrayList<AppEntry>(installed.size)
         for (ai in installed) {
             try {
@@ -280,16 +243,8 @@ class AppRepository(private val context: Context) {
                     null
                 }
                 val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                // isRunning: FLAG_STOPPED-clear candidate AND (recent
-                // foreground event if usage access is available). FLAG_STOPPED
-                // alone falsely marks dead apps as running; the foreground
-                // filter removes apps the system killed or that never started.
-                val inCandidateSet = pkg in runningPkgs
-                val isRunning = if (useForegroundFilter) {
-                    inCandidateSet && pkg in foregroundedPkgs
-                } else {
-                    inCandidateSet
-                }
+                // isRunning: exactly the reference's candidate set.
+                val isRunning = pkg in runningPkgs
                 out += AppEntry(
                     packageName = pkg,
                     label = label,
