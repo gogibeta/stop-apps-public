@@ -88,6 +88,7 @@ class StopRunnerService : Service() {
         when (intent?.action) {
             ACTION_CANCEL -> {
                 engine?.cancel()
+                RunProgress.clear()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -132,6 +133,8 @@ class StopRunnerService : Service() {
             }
 
             override fun onFinished(result: ForceStopEngine.RunResult) {
+                // Run over: drop the progress overlay.
+                RunProgress.clear()
                 scope.launch {
                     val text = getString(
                         R.string.notif_done_text,
@@ -259,6 +262,8 @@ class StopRunnerService : Service() {
                 pkg
             }
         }
+        // Mirror to the UI overlay.
+        RunProgress.update(done, total, label)
         val text = if (label != null) {
             getString(R.string.notif_progress_text, done + 1, total, label)
         } else {
@@ -350,6 +355,7 @@ class StopRunnerService : Service() {
             engine?.cancel()
         } catch (_: Exception) {
         }
+        RunProgress.clear()
         scope.cancel()
         super.onDestroy()
     }
