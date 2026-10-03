@@ -197,17 +197,24 @@ class StopAppsLogicTest {
 
     private fun installedApp(
         pkg: String,
-        enabled: Boolean = true,
-        flags: Int = 0
-    ) = RunningClassifier.InstalledApp(pkg, enabled, flags)
+        enabled: Boolean = true
+    ) = RunningClassifier.InstalledApp(pkg, enabled)
 
     private val launchable = setOf("com.a", "com.b", "com.c", "com.d", "com.e", "com.f", "com.g", "com.h")
 
     @Test
-    fun classifier_flagStopped_matchesReferenceBit() {
-        // The reference checks (flags & 2097152) == 0.
-        assertEquals(2097152, RunningClassifier.FLAG_STOPPED)
-        assertEquals(1 shl 21, RunningClassifier.FLAG_STOPPED)
+    fun classifier_filterRunning_keepsForceStoppedAppsLikeReference() {
+        // The decompiled reference loop (v2.C2671c.a) has no FLAG_STOPPED
+        // check: a force-stopped app is still listed, exactly like AppSleep.
+        val apps = listOf(
+            installedApp("com.a"),
+            installedApp("com.b"),
+            installedApp("com.c")
+        )
+        assertEquals(
+            listOf("com.a", "com.b", "com.c"),
+            RunningClassifier.filterRunning(apps, emptySet(), emptySet()) { it in launchable }
+        )
     }
 
     @Test
@@ -227,17 +234,19 @@ class StopAppsLogicTest {
     }
 
     @Test
-    fun classifier_filterRunning_dropsForceStoppedApps() {
-        // The core of the 7-vs-16 fix: FLAG_STOPPED set -> not running,
-        // regardless of usage history.
+    fun classifier_filterRunning_respectsExclusions() {
+        // Exclusions (self, launcher, keyboard, whitelist, invalid) still
+        // hide apps even though there is no stopped/usage filtering.
         val apps = listOf(
             installedApp("com.a"),
-            installedApp("com.b", flags = RunningClassifier.FLAG_STOPPED),
+            installedApp("com.b"),
             installedApp("com.c")
         )
         assertEquals(
             listOf("com.a", "com.c"),
-            RunningClassifier.filterRunning(apps, emptySet(), emptySet()) { it in launchable }
+            RunningClassifier.filterRunning(
+                apps, setOf("com.b"), emptySet()
+            ) { it in launchable }
         )
     }
 
