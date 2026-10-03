@@ -60,4 +60,8 @@
     <string name="notif_accessibility_needed_title">Accessibility service is off</string>
     <string name="notif_accessibility_needed_text">Enable the Stop Apps accessibility service, then start the run again.</string>
     <string name="cancel">Cancel</string>
+    <!-- Progress overlay -->
+    <string name="progress_title_stopping">Stopping apps…</string>
+    <string name="progress_of">of</string>
+    <string name="progress_apps_done">%1$d of %2$d apps</string>
 </resources>
