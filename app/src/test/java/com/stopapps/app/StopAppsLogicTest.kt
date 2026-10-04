@@ -197,24 +197,17 @@ class StopAppsLogicTest {
 
     private fun installedApp(
         pkg: String,
-        enabled: Boolean = true
-    ) = RunningClassifier.InstalledApp(pkg, enabled)
+        enabled: Boolean = true,
+        flags: Int = 0
+    ) = RunningClassifier.InstalledApp(pkg, enabled, flags)
 
     private val launchable = setOf("com.a", "com.b", "com.c", "com.d", "com.e", "com.f", "com.g", "com.h")
 
     @Test
-    fun classifier_filterRunning_keepsForceStoppedAppsLikeReference() {
-        // The decompiled reference loop (v2.C2671c.a) has no FLAG_STOPPED
-        // check: a force-stopped app is still listed, exactly like AppSleep.
-        val apps = listOf(
-            installedApp("com.a"),
-            installedApp("com.b"),
-            installedApp("com.c")
-        )
-        assertEquals(
-            listOf("com.a", "com.b", "com.c"),
-            RunningClassifier.filterRunning(apps, emptySet(), emptySet()) { it in launchable }
-        )
+    fun classifier_flagStopped_matchesReferenceBit() {
+        // FLAG_STOPPED = 1 shl 21; the OS sets it on force-stopped apps.
+        assertEquals(2097152, RunningClassifier.FLAG_STOPPED)
+        assertEquals(1 shl 21, RunningClassifier.FLAG_STOPPED)
     }
 
     @Test
@@ -234,19 +227,19 @@ class StopAppsLogicTest {
     }
 
     @Test
-    fun classifier_filterRunning_respectsExclusions() {
-        // Exclusions (self, launcher, keyboard, whitelist, invalid) still
-        // hide apps even though there is no stopped/usage filtering.
+    fun classifier_filterRunning_dropsForceStoppedApps() {
+        // Already force-stopped apps (FLAG_STOPPED set) have nothing left
+        // to fix, so they are not counted as running. The 24h usage window
+        // stays removed — that was the filter shrinking the list below the
+        // reference count.
         val apps = listOf(
             installedApp("com.a"),
-            installedApp("com.b"),
+            installedApp("com.b", flags = RunningClassifier.FLAG_STOPPED),
             installedApp("com.c")
         )
         assertEquals(
             listOf("com.a", "com.c"),
-            RunningClassifier.filterRunning(
-                apps, setOf("com.b"), emptySet()
-            ) { it in launchable }
+            RunningClassifier.filterRunning(apps, emptySet(), emptySet()) { it in launchable }
         )
     }
 

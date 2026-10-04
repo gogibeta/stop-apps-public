@@ -23,9 +23,11 @@ class PrefsStore(private val context: Context) {
         private val KEY_LAST_STOPPED = longPreferencesKey("last_stopped_time")
 
         /**
-         * Packages whose stop attempt failed (the reference's
-         * `mi_invalid_packs`, e.g. MIUI refusing the force-stop). They are
-         * hidden from the running list until usage events rehabilitate them.
+         * Packages whose stop attempt found a disabled "Force stop" button
+         * (the reference's `mi_invalid_packs`; kept the historical key name,
+         * now used on all OEMs — e.g. vivo showing a disabled button for
+         * apps with nothing to stop). They are hidden from the running
+         * list until usage events rehabilitate them.
          */
         private val KEY_MI_INVALID = stringSetPreferencesKey("mi_invalid_packs")
     }

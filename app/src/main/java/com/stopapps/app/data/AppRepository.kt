@@ -83,7 +83,10 @@ class AppRepository(private val context: Context) {
      * An app counts as "running" exactly like the reference app (AppSleep
      * 2.4, decompiled `v2.C2671c.a`): `PackageManager.getInstalledApplications(0)`
      * filtered to packages that are enabled and have a launch intent. The
-     * reference loop has no FLAG_STOPPED check and no usage-recency window.
+     * reference loop has no usage-recency window. Unlike the reference,
+     * already force-stopped apps (FLAG_STOPPED set) are NOT counted as
+     * running — they have nothing left to fix, and the flag clears when the
+     * user launches the app again.
      *
      * Per-app RAM comes from the process list and is best-effort: the OS
      * restricts process visibility, so many running apps report 0 kB.
@@ -168,7 +171,8 @@ class AppRepository(private val context: Context) {
             installed.map {
                 RunningClassifier.InstalledApp(
                     packageName = it.packageName ?: "",
-                    enabled = it.enabled
+                    enabled = it.enabled,
+                    flags = it.flags
                 )
             },
             exclusions,
@@ -217,9 +221,11 @@ class AppRepository(private val context: Context) {
         }
 
         // entries: enabled + launchable, minus exclusions/safety.
-        // isRunning matches the reference exactly: in the candidate set
-        // (enabled, launchable, not excluded). No FLAG_STOPPED check, no
-        // usage-recency window — the reference has neither.
+        // isRunning matches the reference's candidate set (enabled,
+        // launchable, not excluded) plus the already-stopped check:
+        // FLAG_STOPPED means the OS already force-stopped the app, so
+        // there is nothing to fix. No usage-recency window — the reference
+        // has none and windowing shrank the list far below it.
         val out = ArrayList<AppEntry>(installed.size)
         for (ai in installed) {
             try {

@@ -17,19 +17,31 @@ package com.stopapps.app.data
  *    them are added to the exclusions.
  * 3. `PackageManager.getInstalledApplications(0)` is enumerated and a
  *    package counts as running only when: name nonempty, not excluded, not
- *    in the safety list, `ApplicationInfo.enabled`, and
+ *    in the safety list, `ApplicationInfo.enabled`, the `FLAG_STOPPED` bit
+ *    clear (already force-stopped apps have nothing to fix), and
  *    `getLaunchIntentForPackage(pkg) != null` (cached).
  *
- * There is intentionally no FLAG_STOPPED check and no usage-recency window:
- * the decompiled reference loop (`v2.C2671c.a`) has neither — it keeps every
- * enabled, launchable, non-excluded package. Earlier versions of this app
- * added both filters and showed fewer apps than the reference; removing them
- * restores count parity.
+ * The reference's list loop (`v2.C2671c.a`) has no FLAG_STOPPED check and no
+ * usage-recency window, so the candidate pool here is deliberately broader
+ * than the reference in one respect (the 24h foreground window was removed
+ * after it shrank the list far below the reference count). But unlike the
+ * reference, already force-stopped apps (FLAG_STOPPED set) are NOT counted
+ * as running: showing them as "running" after a stop run is wrong — there
+ * is nothing left to fix for them, and the flag clears automatically when
+ * the user launches the app again.
  *
  * This object is pure Kotlin (no Android imports) so it stays JVM-testable;
  * the Android calls live in [AppRepository].
  */
 object RunningClassifier {
+
+    /**
+     * The `ApplicationInfo.FLAG_STOPPED` bit (1 shl 21). The OS sets it on an
+     * app that was force-stopped; such apps are already stopped, so they are
+     * not counted as running. Declared as a constant (rather than referencing
+     * `android.content.pm.ApplicationInfo`) so this object stays JVM-testable.
+     */
+    const val FLAG_STOPPED: Int = 1 shl 21
 
     /**
      * Default of the reference's `last_stopped_time` preference. Usage-event
@@ -40,13 +52,15 @@ object RunningClassifier {
     /** Minimal installed-app data needed by [filterRunning]. */
     data class InstalledApp(
         val packageName: String,
-        val enabled: Boolean
+        val enabled: Boolean,
+        val flags: Int
     )
 
     /**
      * The reference's final enumeration loop: installed apps in order, kept
      * only when the package name is nonempty, not excluded, not in the
-     * safety list, enabled, and having a launch intent.
+     * safety list, enabled, `FLAG_STOPPED` clear, and having a launch
+     * intent.
      */
     fun filterRunning(
         apps: List<InstalledApp>,
@@ -61,6 +75,7 @@ object RunningClassifier {
             if (pkg in exclusions) continue
             if (pkg in safetyList) continue
             if (!app.enabled) continue
+            if ((app.flags and FLAG_STOPPED) != 0) continue
             if (!hasLaunchIntent(pkg)) continue
             out += pkg
         }

@@ -49,10 +49,10 @@ import kotlinx.coroutines.withTimeout
  * - Pre-confirmation-click delay: 100 ms normally, 50 ms in turbo mode.
  * - `com.android.chrome` is stopped last.
  * - Window ids already handled are skipped (deduplication).
- * - A disabled "Force stop" button on MIUI means the package can never be
- *   stopped this way: it is recorded as MIUI-invalid (reference
+ * - A disabled "Force stop" button means the package has nothing to stop
+ *   (not running / already stopped). It is recorded as invalid (reference
  *   `INVALID_PACK`), skipped, and hidden from the running list until usage
- *   events rehabilitate it.
+ *   events rehabilitate it — on all OEMs, not just MIUI.
  * - If the system unbinds the accessibility service mid-run (vivo battery
  *   management kills background apps), the in-flight attempt completes with
  *   SERVICE_LOST and the engine waits up to 15 s for the rebind, then
@@ -79,7 +79,7 @@ class ForceStopEngine(private val appContext: Context) {
         val stopped: List<String>,
         val failed: List<String>,
         val skipped: List<String>,
-        /** Packages the reference records as MIUI-invalid (hidden from the running list). */
+        /** Packages recorded as invalid (disabled Force-stop button; hidden from the running list). */
         val invalid: List<String> = emptyList(),
         /**
          * Device available-RAM delta (after minus before the run), in bytes.
@@ -292,10 +292,10 @@ class ForceStopEngine(private val appContext: Context) {
 
     /**
      * Stops one package. Returns the outcome plus whether the package must be
-     * recorded as MIUI-invalid (reference `INVALID_PACK`): a disabled
-     * "Force stop" button on MIUI means the package can never be stopped
-     * this way, so it is hidden from the running list until usage events
-     * rehabilitate it.
+     * recorded as invalid (reference `INVALID_PACK`): a disabled
+     * "Force stop" button means there is nothing to stop, so the package is
+     * hidden from the running list until usage events rehabilitate it.
+     * Applies on all OEMs (vivo, MIUI, ...).
      */
     private suspend fun stopOnePackage(pkg: String): Pair<PackageOutcome, Boolean> {
         var retried = false
@@ -314,7 +314,7 @@ class ForceStopEngine(private val appContext: Context) {
             } catch (_: CancellationException) {
                 return PackageOutcome.FAILED to false
             }
-            if (signal == AttemptSignal.FORCE_STOP_DISABLED && miui) invalid = true
+            if (signal == AttemptSignal.FORCE_STOP_DISABLED) invalid = true
             FileLogger.log(
                 "engine", "attempt signal for $pkg",
                 data = mapOf(
@@ -509,9 +509,11 @@ class ForceStopEngine(private val appContext: Context) {
         }
         try {
             if (!button.isEnabled) {
-                // Disabled "Force stop": on MIUI the package is recorded as
-                // MIUI-invalid (reference INVALID_PACK); otherwise give it
-                // one reopen-and-retry.
+                // Disabled "Force stop": nothing to stop. The package is
+                // recorded as invalid (reference INVALID_PACK) so it is
+                // hidden from the running list until usage events show the
+                // user launched it again. One reopen-and-retry first, in
+                // case the button state was transient.
                 listener?.onLog("  [dbg] Force-stop button found but DISABLED (miui=$miui)")
                 completeAttempt(AttemptSignal.FORCE_STOP_DISABLED)
                 return

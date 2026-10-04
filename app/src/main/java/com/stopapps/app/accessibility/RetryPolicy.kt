@@ -5,7 +5,10 @@ package com.stopapps.app.accessibility
  * (AppSleep 2.4):
  * - Missing/timeout/click-failure signals get exactly one reopen-and-retry,
  *   then a terminal outcome.
- * - A disabled "Force stop" on MIUI means "already stopped" -> skip.
+ * - A disabled "Force stop" means "already stopped" -> skip (immediately on
+ *   MIUI, after one reopen-and-retry elsewhere). The engine additionally
+ *   records disabled-button packages as invalid so they are hidden from the
+ *   running list until usage events rehabilitate them (all OEMs).
  * - SERVICE_LOST (accessibility service unbound mid-attempt) is mapped like
  *   a timeout here; the engine intercepts it first to wait for the rebind.
  *

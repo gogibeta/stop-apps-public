@@ -21,12 +21,11 @@
 # $OUT/TEST_OK. On environmental failure (adb lost / device never usable /
 # a wait starved by system ANRs — "System UI isn't responding" dialogs
 # eating most of the wait's polls so the tap target never had a chance to
-# render, or an app ANR dialog seen while the framework is/was wedged
-# (starvation, not an app bug)) it writes $OUT/RETRYABLE and exits 75 (EX_TEMPFAIL); the workflow
-# then boots a FRESH emulator and retries the test phase up to twice. A genuine
+# render) it writes $OUT/RETRYABLE and exits 75 (EX_TEMPFAIL); the workflow
+# then boots a FRESH emulator and retries the test phase once. A genuine
 # test failure (app crash, engine never engaged, tap target genuinely
 # missing on a healthy system) exits 1 with no marker, and the workflow
-# fails honestly after at most 3 attempts.
+# fails honestly after at most 2 attempts.
 set -u
 
 APK="${1:?usage: emulator-test.sh <apk>}"
@@ -292,20 +291,6 @@ dismiss_system_dialogs() {
     SYS_WEDGED_POLLS=$((SYS_WEDGED_POLLS + 1))
     if [[ "$title" == *"Stop Apps"* ]]; then
       echo "APP ANR — our app is not responding"
-      # An app ANR while the framework itself is/was wedged (system ANR
-      # dialogs or dump timeouts already seen in this wait, or a wedge
-      # recovery happened earlier this attempt) is starvation, not an app
-      # bug: on the KVM-less software emulator a wedged system_server
-      # starves every process. Retry on a fresh emulator instead of failing
-      # honestly; an app ANR on a healthy-looking framework stays a genuine
-      # failure. Motivating runs: 36750110812, 36755542038 — both wedged
-      # first, then the starved app ANR'd.
-      if [ "$WEDGED_RECOVERED" = "1" ] || [ "$SYS_WEDGED_POLLS" -ge 1 ]; then
-        echo "app ANR during wedged framework - environmental, marking RETRYABLE"
-        tadb logcat -d > "$OUT/logcat-retryable.txt" 2>/dev/null || true
-        touch "$OUT/RETRYABLE"
-        exit 75
-      fi
       return 1
     fi
     WEDGED_STREAK=$((WEDGED_STREAK + 1))
@@ -457,12 +442,8 @@ echo "=== phase 2b: real single-app stop run ==="
 # Use the "All" tab so the target app is listed regardless of running state.
 wait_and_tap "^All$" "All filter chip" 60 || echo "WARN: All chip not found, continuing"
 # Tap the search field and try candidates until one is listed.
-# 2026-10-01: the workflow now boots the AOSP (no-GMS) image, which has no
-# Chrome/Gmail/Maps/YouTube — fall back to stock AOSP apps (Calculator,
-# Clock, Contacts, Files, Messaging, Music) so the phase works on both
-# image flavors.
 TARGET=""
-for CAND in Chrome Gmail Maps YouTube Calculator Clock Contacts Files Messaging Music; do
+for CAND in Chrome Gmail Maps YouTube; do
   wait_and_tap "^Search apps" "search field" 60 || { echo "SEARCH FIELD NOT FOUND"; exit 1; }
   # Clear any previous query, then type the candidate.
   for _ in $(seq 1 30); do tadb shell input keyevent 67; done
